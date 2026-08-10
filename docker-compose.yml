@@ -1,0 +1,17 @@
+services:
+  backend:
+    build: .
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      # Postgres runs on the HOST, not in Compose
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://moba:moba@host.docker.internal:5432/mobauniverse}
+      JWT_SECRET: ${JWT_SECRET:-change-me-in-production}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,https://mobauniverse.com}
+      SITE_URL: ${SITE_URL:-http://localhost:5173}
+    extra_hosts:
+      # Linux Docker: resolve host.docker.internal → host gateway
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "8000:8000"
