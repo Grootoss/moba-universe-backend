@@ -145,5 +145,6 @@ class ArticleTranslation(Base):
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     excerpt: Mapped[str] = mapped_column(String(500), nullable=False, default="")
     content: Mapped[str] = mapped_column(Text, nullable=False)
+    mlbb_example: Mapped[str] = mapped_column(Text, nullable=False, default="")
 
     article: Mapped[Article] = relationship(back_populates="translations")

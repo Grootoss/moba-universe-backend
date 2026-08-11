@@ -1,4 +1,5 @@
 from tests.conftest import auth_header
+from app.models import Category
 
 
 def test_register_and_login(client):
@@ -55,8 +56,70 @@ def test_get_article_by_slug(client, published_article):
     assert data["slug"] == "mythic-guide"
     assert "ru" in data["translations"]
     assert data["translations"]["ru"]["title"] == "Как апнуть миф"
+    assert "mlbb_example" in data["translations"]["ru"]
     assert data.get("created_at")
     assert data.get("updated_at")
+
+
+def test_list_categories_public(client, category):
+    res = client.get("/api/evergreen/categories")
+    assert res.status_code == 200
+    data = res.json()
+    assert isinstance(data, list)
+    assert any(c["slug"] == category.slug for c in data)
+
+
+def test_filter_articles_by_category(client, published_article, category, admin_user, db_session):
+    other = Category(slug="empty-cat", name_ru="Пусто", name_en="Empty")
+    db_session.add(other)
+    db_session.commit()
+
+    res = client.get(f"/api/evergreen/articles?paginated=true&category={category.slug}")
+    assert res.status_code == 200
+    body = res.json()
+    assert body["total"] >= 1
+    assert any(i["slug"] == "mythic-guide" for i in body["items"])
+
+    res_empty = client.get("/api/evergreen/articles?paginated=true&category=empty-cat")
+    assert res_empty.status_code == 200
+    assert res_empty.json()["total"] == 0
+
+
+def test_admin_mlbb_example_roundtrip(client, admin_user, category):
+    headers = auth_header(client, admin_user.email, "adminpass")
+    res = client.post(
+        "/api/admin/articles",
+        headers=headers,
+        json={
+            "slug": "mlbb-block-test",
+            "category_slug": category.slug,
+            "status": "published",
+            "translations": {
+                "ru": {
+                    "title": "RU",
+                    "excerpt": "",
+                    "content": "<p>ru</p>",
+                    "mlbb_example": "<p>mlbb ru</p>",
+                },
+                "en": {
+                    "title": "EN",
+                    "excerpt": "",
+                    "content": "<p>en</p>",
+                    "mlbb_example": "<p>mlbb en</p>",
+                },
+            },
+        },
+    )
+    assert res.status_code == 200, res.text
+    data = res.json()
+    assert data["mlbb_example_ru"] == "<p>mlbb ru</p>"
+    assert data["mlbb_example_en"] == "<p>mlbb en</p>"
+
+    public = client.get("/api/evergreen/articles/mlbb-block-test")
+    assert public.status_code == 200
+    tr = public.json()["translations"]
+    assert tr["ru"]["mlbb_example"] == "<p>mlbb ru</p>"
+    assert tr["en"]["mlbb_example"] == "<p>mlbb en</p>"
 
 
 def test_get_article_missing_slug(client):

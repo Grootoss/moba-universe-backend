@@ -144,6 +144,8 @@ def _article_admin(article: Article) -> ArticleAdminOut:
         excerpt_en=en.excerpt if en else None,
         content_ru=ru.content if ru else None,
         content_en=en.content if en else None,
+        mlbb_example_ru=ru.mlbb_example if ru else None,
+        mlbb_example_en=en.mlbb_example if en else None,
     )
 
 
@@ -200,6 +202,7 @@ def admin_create_article(
                 title=tr.title,
                 excerpt=tr.excerpt,
                 content=tr.content,
+                mlbb_example=tr.mlbb_example or "",
             )
         )
     db.add(article)
@@ -245,9 +248,16 @@ def admin_update_article(
                 existing[lang].title = tr.title
                 existing[lang].excerpt = tr.excerpt
                 existing[lang].content = tr.content
+                existing[lang].mlbb_example = tr.mlbb_example or ""
             else:
                 article.translations.append(
-                    ArticleTranslation(lang=lang, title=tr.title, excerpt=tr.excerpt, content=tr.content)
+                    ArticleTranslation(
+                        lang=lang,
+                        title=tr.title,
+                        excerpt=tr.excerpt,
+                        content=tr.content,
+                        mlbb_example=tr.mlbb_example or "",
+                    )
                 )
     db.commit()
     article = db.scalar(

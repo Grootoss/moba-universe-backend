@@ -187,12 +187,14 @@ class TranslationIn(BaseModel):
     title: str = Field(min_length=1, max_length=255)
     excerpt: str = Field(default="", max_length=500)
     content: str = Field(min_length=1)
+    mlbb_example: str = Field(default="")
 
 
 class TranslationOut(BaseModel):
     title: str
     excerpt: str
     content: str
+    mlbb_example: str = ""
 
 
 class ArticleCreateIn(BaseModel):
@@ -264,6 +266,8 @@ class ArticleAdminOut(BaseModel):
     excerpt_en: str | None = None
     content_ru: str | None = None
     content_en: str | None = None
+    mlbb_example_ru: str | None = None
+    mlbb_example_en: str | None = None
 
 
 class ArticleListItemOut(BaseModel):

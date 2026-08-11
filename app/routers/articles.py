@@ -3,7 +3,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.database import get_db
-from app.models import Article, ArticleStatus, ArticleTranslation
+from app.models import Article, ArticleStatus, ArticleTranslation, Category
 from app.schemas import ArticleListItemOut, ArticleListOut
 
 router = APIRouter(prefix="/api/evergreen/articles", tags=["articles"])
@@ -11,7 +11,12 @@ router = APIRouter(prefix="/api/evergreen/articles", tags=["articles"])
 
 def _article_to_public(article: Article) -> ArticleListItemOut:
     translations = {
-        tr.lang: {"title": tr.title, "excerpt": tr.excerpt, "text": tr.content}
+        tr.lang: {
+            "title": tr.title,
+            "excerpt": tr.excerpt,
+            "text": tr.content,
+            "mlbb_example": tr.mlbb_example or "",
+        }
         for tr in article.translations
     }
     return ArticleListItemOut(
@@ -53,6 +58,7 @@ def _map_rows(rows: list[Article], lang: str | None) -> list[ArticleListItemOut]
 def list_articles(
     lang: str | None = None,
     q: str | None = Query(None, description="Search in article titles"),
+    category: str | None = Query(None, description="Filter by category slug"),
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=100),
     paginated: bool = Query(
@@ -65,6 +71,9 @@ def list_articles(
     search = (q or "").strip()
     if search:
         filters.append(Article.translations.any(ArticleTranslation.title.ilike(f"%{search}%")))
+    category_slug = (category or "").strip()
+    if category_slug:
+        filters.append(Article.category.has(Category.slug == category_slug))
 
     total = db.scalar(select(func.count()).select_from(Article).where(*filters)) or 0
     rows = db.scalars(
