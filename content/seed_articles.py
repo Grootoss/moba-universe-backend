@@ -13,6 +13,7 @@ CATEGORIES = [
     {"slug": "mental", "name_ru": "Менталка", "name_en": "Mental"},
     {"slug": "draft", "name_ru": "Драфт", "name_en": "Draft"},
     {"slug": "beginners", "name_ru": "Новичкам", "name_en": "Beginners"},
+    {"slug": "mlbb", "name_ru": "MLBB", "name_en": "MLBB"},
 ]
 
 articles: list[dict[str, Any]] = []
