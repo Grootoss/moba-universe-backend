@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
+from app.category_helpers import list_all_categories
 from app.database import get_db
 from app.deps import require_admin, require_moderator
 from app.models import (
@@ -151,7 +152,7 @@ def _article_admin(article: Article) -> ArticleAdminOut:
 
 @router.get("/categories", response_model=list[CategoryOut])
 def admin_list_categories(_: User = Depends(require_admin), db: Session = Depends(get_db)):
-    rows = db.scalars(select(Category).order_by(Category.id)).all()
+    rows = list_all_categories(db)
     return [CategoryOut(slug=c.slug, name_ru=c.name_ru, name_en=c.name_en) for c in rows]
 
 
