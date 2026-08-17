@@ -61,6 +61,8 @@ def sitemap_xml(db: Session = Depends(get_db)):
     now = datetime.now(timezone.utc).date().isoformat()
 
     urls: list[tuple[str, str, str, str, str]] = [
+        (f"{base}/ru", f"{base}/en", now, "daily", "ru"),
+        (f"{base}/en", f"{base}/ru", now, "daily", "en"),
         (f"{base}/ru/evergreen", f"{base}/en/evergreen", now, "daily", "ru"),
         (f"{base}/en/evergreen", f"{base}/ru/evergreen", now, "daily", "en"),
         (f"{base}/ru/users", f"{base}/en/users", now, "daily", "ru"),

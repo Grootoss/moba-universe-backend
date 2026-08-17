@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session, selectinload
 from app.category_helpers import list_all_categories
 from app.database import get_db
 from app.deps import require_admin, require_moderator
+from app.media import derive_cover_thumb
 from app.models import (
     Article,
     ArticleStatus,
@@ -29,6 +30,25 @@ router = APIRouter(prefix="/api/admin", tags=["admin"])
 
 def _profile_admin(profile: UserProfile) -> AdminProfileOut:
     user = profile.user
+    raw = profile.social_links or {}
+    if isinstance(raw, list):
+        social_links = {
+            str(item.get("label")): str(item.get("url"))
+            for item in raw
+            if isinstance(item, dict) and item.get("label") and item.get("url")
+        }
+        contacts = [
+            {
+                "label": str(item.get("label")),
+                "url": str(item.get("url")),
+                "is_public": bool(item.get("is_public")),
+            }
+            for item in raw
+            if isinstance(item, dict) and item.get("label") and item.get("url")
+        ]
+    else:
+        social_links = raw if isinstance(raw, dict) else {}
+        contacts = []
     return AdminProfileOut(
         id=profile.user_id,
         user_id=profile.user_id,
@@ -37,8 +57,17 @@ def _profile_admin(profile: UserProfile) -> AdminProfileOut:
         nickname=profile.nickname,
         bio=profile.bio,
         telegram_url=profile.telegram_url,
-        social_links=profile.social_links or {},
-        games=[GameRankOut(game=g.game, rank=g.rank, sort_order=g.sort_order) for g in profile.game_ranks],
+        social_links=social_links,
+        contacts=contacts,
+        games=[
+            GameRankOut(
+                game=g.game,
+                rank=g.rank,
+                roles=[str(r) for r in (g.roles or [])],
+                sort_order=g.sort_order,
+            )
+            for g in profile.game_ranks
+        ],
         moderation_status=profile.moderation_status,
         moderation_note=profile.moderation_note or "",
         is_public=profile.is_public,
@@ -139,6 +168,7 @@ def _article_admin(article: Article) -> ArticleAdminOut:
         status=article.status,
         category=article.category.slug if article.category else None,
         cover_image=article.cover_image,
+        cover_thumb=derive_cover_thumb(article.cover_image, article.cover_thumb),
         title_ru=ru.title if ru else None,
         title_en=en.title if en else None,
         excerpt_ru=ru.excerpt if ru else None,
@@ -195,6 +225,7 @@ def admin_create_article(
         author_id=admin.id,
         status=body.status if body.status in {s.value for s in ArticleStatus} else ArticleStatus.draft.value,
         cover_image=(body.cover_image or "").strip() or None,
+        cover_thumb=(body.cover_thumb or "").strip() or None,
     )
     for lang, tr in body.translations.items():
         article.translations.append(
@@ -240,6 +271,8 @@ def admin_update_article(
         article.status = body.status
     if body.cover_image is not None:
         article.cover_image = body.cover_image.strip() or None
+    if body.cover_thumb is not None:
+        article.cover_thumb = body.cover_thumb.strip() or None
     if body.category_slug is not None:
         article.category = db.scalar(select(Category).where(Category.slug == body.category_slug))
     if body.translations:

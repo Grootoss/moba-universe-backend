@@ -70,12 +70,18 @@ class UserOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
-from app.game_options import GAME_SLUGS, RANKS
+from app.game_options import GAME_SLUGS, RANKS, ROLE_SLUGS
+
+_SOCIAL_LABEL_RE = re.compile(r"^[A-Za-zА-Яа-яЁё0-9 ._-]{1,40}$")
+_SAFE_URL_RE = re.compile(r"^https?://", re.IGNORECASE)
+_MAX_CONTACTS = 3
+_MAX_ROLES = 5
 
 
 class GameRankIn(BaseModel):
     game: str
     rank: str = Field(min_length=1, max_length=80)
+    roles: list[str] = Field(default_factory=list)
     sort_order: int = 0
 
     @field_validator("game")
@@ -95,11 +101,59 @@ class GameRankIn(BaseModel):
             raise ValueError(f"invalid rank for {game}")
         return rank
 
+    @field_validator("roles")
+    @classmethod
+    def roles_ok(cls, v: list[str], info: ValidationInfo) -> list[str]:
+        game = info.data.get("game")
+        allowed = ROLE_SLUGS.get(game, frozenset()) if isinstance(game, str) else frozenset()
+        seen: list[str] = []
+        for raw in v:
+            slug = str(raw).strip()
+            if not slug:
+                continue
+            if slug not in allowed:
+                raise ValueError(f"invalid role for {game}: {slug}")
+            if slug in seen:
+                continue
+            seen.append(slug)
+        if len(seen) > _MAX_ROLES:
+            raise ValueError("at most 5 roles per game")
+        return seen
+
 
 class GameRankOut(BaseModel):
     game: str
     rank: str
+    roles: list[str] = Field(default_factory=list)
     sort_order: int = 0
+
+
+class SocialLinkIn(BaseModel):
+    label: str = Field(min_length=1, max_length=40)
+    url: str = Field(min_length=1, max_length=255)
+    is_public: bool = False
+
+    @field_validator("label")
+    @classmethod
+    def label_ok(cls, v: str) -> str:
+        s = v.strip()
+        if not _SOCIAL_LABEL_RE.fullmatch(s):
+            raise ValueError("invalid social label")
+        return s
+
+    @field_validator("url")
+    @classmethod
+    def url_ok(cls, v: str) -> str:
+        s = v.strip()
+        if not _SAFE_URL_RE.match(s):
+            raise ValueError("url must start with http:// or https://")
+        return s
+
+
+class SocialLinkOut(BaseModel):
+    label: str
+    url: str
+    is_public: bool = False
 
 
 class PublicProfileOut(BaseModel):
@@ -109,9 +163,11 @@ class PublicProfileOut(BaseModel):
     bio: str
     telegram_url: str | None = None
     social_links: dict = Field(default_factory=dict)
+    contacts: list[SocialLinkOut] = Field(default_factory=list)
     games: list[GameRankOut] = Field(default_factory=list)
     moderation_status: str | None = None
     is_public: bool | None = None
+    contact_status: str | None = None
 
 
 class OwnProfileOut(PublicProfileOut):
@@ -120,9 +176,6 @@ class OwnProfileOut(PublicProfileOut):
     is_public: bool
     profile_edit_unlocked: bool
     can_edit: bool
-
-
-_SAFE_URL_RE = re.compile(r"^https?://", re.IGNORECASE)
 
 
 class ProfileUpdateIn(BaseModel):
@@ -159,6 +212,33 @@ class ProfileGamesUpdateIn(BaseModel):
                 raise ValueError("duplicate game in list")
             seen.add(g.game)
         return v
+
+
+class ProfileContactsUpdateIn(BaseModel):
+    """Social / messenger links — saved immediately. Private ones stay hidden until a contact request is accepted."""
+
+    contacts: list[SocialLinkIn] = Field(default_factory=list)
+
+    @field_validator("contacts")
+    @classmethod
+    def contacts_ok(cls, v: list[SocialLinkIn]) -> list[SocialLinkIn]:
+        if len(v) > _MAX_CONTACTS:
+            raise ValueError("at most 3 contact links")
+        return v
+
+
+class ContactUserOut(BaseModel):
+    request_id: int
+    user_id: int
+    nickname: str
+    direction: str
+    status: str
+    contacts: list[SocialLinkOut] | None = None
+
+
+class ContactsListOut(BaseModel):
+    incoming: list[ContactUserOut] = Field(default_factory=list)
+    outgoing: list[ContactUserOut] = Field(default_factory=list)
 
 
 class AdminProfileOut(PublicProfileOut):
@@ -202,6 +282,7 @@ class ArticleCreateIn(BaseModel):
     category_slug: str | None = None
     status: str = "published"
     cover_image: str | None = None
+    cover_thumb: str | None = None
     translations: dict[str, TranslationIn]
 
     @field_validator("slug")
@@ -232,6 +313,7 @@ class ArticleUpdateIn(BaseModel):
     category_slug: str | None = None
     status: str | None = None
     cover_image: str | None = None
+    cover_thumb: str | None = None
     translations: dict[str, TranslationIn] | None = None
 
     @field_validator("slug")
@@ -260,6 +342,7 @@ class ArticleAdminOut(BaseModel):
     status: str
     category: str | None = None
     cover_image: str | None = None
+    cover_thumb: str | None = None
     title_ru: str | None = None
     title_en: str | None = None
     excerpt_ru: str | None = None
@@ -275,6 +358,7 @@ class ArticleListItemOut(BaseModel):
     slug: str
     category: str | None = None
     cover_image: str | None = None
+    cover_thumb: str | None = None
     title: str | None = None
     excerpt: str | None = None
     text: str | None = None
@@ -296,9 +380,17 @@ class CategoryOut(BaseModel):
     name_en: str
 
 
+class RoleOptionOut(BaseModel):
+    slug: str
+    number: int
+    name_ru: str
+    name_en: str
+
+
 class GameOptionsOut(BaseModel):
     games: list[dict[str, str]]
     ranks: dict[str, list[str]]
+    roles: dict[str, list[RoleOptionOut]] = Field(default_factory=dict)
 
 
 class ErrorOut(BaseModel):

@@ -3,6 +3,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.database import get_db
+from app.media import derive_cover_thumb
 from app.models import Article, ArticleStatus, ArticleTranslation, Category
 from app.schemas import ArticleListItemOut, ArticleListOut
 
@@ -24,6 +25,7 @@ def _article_to_public(article: Article) -> ArticleListItemOut:
         slug=article.slug,
         category=article.category.slug if article.category else None,
         cover_image=article.cover_image,
+        cover_thumb=derive_cover_thumb(article.cover_image, article.cover_thumb),
         translations=translations,
         created_at=article.created_at,
         updated_at=article.updated_at,
@@ -40,6 +42,7 @@ def _article_flat(article: Article, lang: str) -> ArticleListItemOut:
         slug=article.slug,
         category=article.category.slug if article.category else None,
         cover_image=article.cover_image,
+        cover_thumb=derive_cover_thumb(article.cover_image, article.cover_thumb),
         title=tr.title,
         excerpt=tr.excerpt,
         text=tr.content,

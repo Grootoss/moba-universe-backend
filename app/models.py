@@ -45,6 +45,12 @@ class GameType(str, enum.Enum):
     smite = "smite"
 
 
+class ContactRequestStatus(str, enum.Enum):
+    pending = "pending"
+    accepted = "accepted"
+    declined = "declined"
+
+
 class User(Base):
     __tablename__ = "users"
 
@@ -90,6 +96,25 @@ class UserProfile(Base):
     )
 
 
+class ContactRequest(Base):
+    __tablename__ = "contact_requests"
+    __table_args__ = (UniqueConstraint("requester_id", "target_id", name="uq_contact_pair"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    requester_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    target_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    status: Mapped[str] = mapped_column(
+        String(20), nullable=False, default=ContactRequestStatus.pending.value
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    requester: Mapped[User] = relationship(foreign_keys=[requester_id])
+    target: Mapped[User] = relationship(foreign_keys=[target_id])
+
+
 class UserGameRank(Base):
     __tablename__ = "user_game_ranks"
     __table_args__ = (UniqueConstraint("profile_id", "game", name="uq_profile_game"),)
@@ -98,6 +123,7 @@ class UserGameRank(Base):
     profile_id: Mapped[int] = mapped_column(ForeignKey("user_profiles.id", ondelete="CASCADE"))
     game: Mapped[str] = mapped_column(String(20), nullable=False)
     rank: Mapped[str] = mapped_column(String(80), nullable=False, default="")
+    roles: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
     sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
     profile: Mapped[UserProfile] = relationship(back_populates="game_ranks")
@@ -123,6 +149,7 @@ class Article(Base):
     author_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default=ArticleStatus.published.value)
     cover_image: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    cover_thumb: Mapped[str | None] = mapped_column(String(512), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()

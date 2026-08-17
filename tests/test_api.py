@@ -210,3 +210,139 @@ def test_sitemap_includes_published_article(client, published_article):
     assert "/en/evergreen/mythic-guide" in res.text
     assert "/ru/evergreen" in res.text
     assert "/en/evergreen" in res.text
+    assert "/ru</loc>" in res.text
+    assert "/en</loc>" in res.text
+
+
+def _publish_profile(db_session, user, nickname, games=None, contacts=None):
+    from app.models import UserGameRank, UserProfile
+    from app.models import ModerationStatus
+
+    profile = UserProfile(
+        user_id=user.id,
+        nickname=nickname,
+        bio="bio",
+        moderation_status=ModerationStatus.approved.value,
+        is_public=True,
+        social_links=contacts or [],
+    )
+    db_session.add(profile)
+    db_session.flush()
+    for i, g in enumerate(games or []):
+        db_session.add(
+            UserGameRank(
+                profile_id=profile.id,
+                game=g["game"],
+                rank=g["rank"],
+                roles=g.get("roles") or [],
+                sort_order=i,
+            )
+        )
+    db_session.commit()
+    db_session.refresh(profile)
+    return profile
+
+
+def test_users_search_by_name_game_role(client, db_session, regular_user):
+    from app.models import User
+    from app.security import hash_password
+
+    other = User(
+        email="midlaner@example.com",
+        username="midlaner",
+        password_hash=hash_password("secret12"),
+        role="user",
+        profile_edit_unlocked=True,
+    )
+    db_session.add(other)
+    db_session.commit()
+
+    _publish_profile(
+        db_session,
+        regular_user,
+        "GoldCarry",
+        games=[{"game": "mlbb", "rank": "Mythic", "roles": ["4", "5"]}],
+    )
+    _publish_profile(
+        db_session,
+        other,
+        "MidOnly",
+        games=[{"game": "lol", "rank": "Gold", "roles": ["3"]}],
+    )
+
+    by_name = client.get("/api/users?q=gold")
+    assert by_name.status_code == 200
+    nicks = {u["nickname"] for u in by_name.json()}
+    assert "GoldCarry" in nicks
+    assert "MidOnly" not in nicks
+
+    by_game = client.get("/api/users?game=lol")
+    assert {u["nickname"] for u in by_game.json()} == {"MidOnly"}
+
+    by_role = client.get("/api/users?game=mlbb&role=4")
+    assert {u["nickname"] for u in by_role.json()} == {"GoldCarry"}
+    assert by_role.json()[0]["games"][0]["roles"] == ["4", "5"]
+
+
+def test_contact_request_flow(client, db_session, regular_user):
+    from app.models import User
+    from app.security import hash_password
+    from tests.conftest import auth_header
+
+    other = User(
+        email="target@example.com",
+        username="targetu",
+        password_hash=hash_password("secret12"),
+        role="user",
+        profile_edit_unlocked=True,
+    )
+    db_session.add(other)
+    db_session.commit()
+    _publish_profile(
+        db_session,
+        other,
+        "TargetNick",
+        contacts=[
+            {"label": "Telegram", "url": "https://t.me/secret", "is_public": False},
+            {"label": "Discord", "url": "https://discord.gg/public", "is_public": True},
+        ],
+    )
+
+    public = client.get(f"/api/users/{other.id}")
+    assert public.status_code == 200
+    labels = {c["label"] for c in public.json()["contacts"]}
+    assert "Discord" in labels
+    assert "Telegram" not in labels
+
+    headers = auth_header(client, regular_user.email, "player1")
+    req = client.post(f"/api/users/{other.id}/contact-request", headers=headers)
+    assert req.status_code == 200, req.text
+    assert req.json()["status"] == "pending"
+    assert req.json()["contacts"] is None
+
+    other_headers = auth_header(client, other.email, "secret12")
+    inbox = client.get("/api/me/contacts", headers=other_headers)
+    assert inbox.status_code == 200
+    assert len(inbox.json()["incoming"]) == 1
+    request_id = inbox.json()["incoming"][0]["request_id"]
+
+    accepted = client.post(f"/api/me/contacts/{request_id}/accept", headers=other_headers)
+    assert accepted.status_code == 200
+    assert accepted.json()["status"] == "accepted"
+
+    mine = client.get("/api/me/contacts", headers=headers)
+    assert mine.status_code == 200
+    outgoing = mine.json()["outgoing"]
+    assert outgoing[0]["status"] == "accepted"
+    urls = {c["url"] for c in outgoing[0]["contacts"]}
+    assert "https://t.me/secret" in urls
+
+
+def test_profile_options_include_roles(client):
+    res = client.get("/api/profile/options")
+    assert res.status_code == 200
+    data = res.json()
+    assert "mlbb" in data["roles"]
+    assert len(data["roles"]["mlbb"]) == 5
+    assert data["roles"]["mlbb"][0]["slug"] == "1"
+
