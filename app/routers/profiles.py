@@ -1,5 +1,8 @@
+import json
+
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import and_, or_, select
+from sqlalchemy import String, and_, cast, or_, select
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Session, selectinload
 
 from app.database import get_db
@@ -179,6 +182,15 @@ def _has_accepted(db: Session, user_a: int, user_b: int) -> bool:
     return any(r.status == ContactRequestStatus.accepted.value for r in _pair_requests(db, user_a, user_b))
 
 
+def _roles_contain(role_slug: str):
+    payloads = [json.dumps([role_slug], separators=(",", ":"))]
+    if role_slug.isdigit():
+        payloads.append(json.dumps([int(role_slug)], separators=(",", ":")))
+    conds = [UserGameRank.roles.op("@>")(cast(payload, JSONB)) for payload in payloads]
+    conds.append(cast(UserGameRank.roles, String).contains(f'"{role_slug}"'))
+    return or_(*conds)
+
+
 def _nickname_for(db: Session, user_id: int) -> str:
     profile = db.scalar(select(UserProfile).where(UserProfile.user_id == user_id))
     if profile and profile.nickname:
@@ -260,7 +272,7 @@ def update_my_games(
             UserGameRank(
                 game=g.game,
                 rank=g.rank.strip(),
-                roles=list(g.roles),
+                roles=list(str(r) for r in g.roles),
                 sort_order=g.sort_order or i,
             )
         )
@@ -322,7 +334,6 @@ def list_my_contacts(user: User = Depends(get_current_user), db: Session = Depen
             select(ContactRequest)
             .where(
                 or_(ContactRequest.requester_id == user.id, ContactRequest.target_id == user.id),
-                ContactRequest.status != ContactRequestStatus.declined.value,
             )
             .order_by(ContactRequest.updated_at.desc())
         ).all()
@@ -331,6 +342,8 @@ def list_my_contacts(user: User = Depends(get_current_user), db: Session = Depen
     outgoing: list[ContactUserOut] = []
     seen_others: set[int] = set()
     for row in rows:
+        if row.status == ContactRequestStatus.declined.value and row.target_id == user.id:
+            continue
         other_id = row.target_id if row.requester_id == user.id else row.requester_id
         if other_id in seen_others:
             continue
@@ -403,11 +416,13 @@ def list_public_profiles(
         )
     game_slug = (game or "").strip().lower()
     role_slug = (role or "").strip()
+    if role_slug not in {"1", "2", "3", "4", "5"}:
+        role_slug = ""
     rank_match = None
     if game_slug:
         rank_match = UserGameRank.game == game_slug
     if role_slug:
-        role_cond = UserGameRank.roles.contains([role_slug])
+        role_cond = _roles_contain(role_slug)
         rank_match = role_cond if rank_match is None else and_(rank_match, role_cond)
     if rank_match is not None:
         filters.append(UserProfile.game_ranks.any(rank_match))
