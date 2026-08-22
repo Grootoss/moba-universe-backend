@@ -27,7 +27,7 @@ def test_register_and_login(client):
     assert me.status_code == 200
     data = me.json()
     assert data["email"] == "newuser@example.com"
-    assert data["username"] == "newuser"
+    assert data["username"] == "NewUser"
     assert data["role"] == "user"
 
 

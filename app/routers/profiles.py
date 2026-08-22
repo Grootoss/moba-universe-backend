@@ -1,16 +1,11 @@
-import json
-
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import String, and_, cast, or_, select
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.database import get_db
 from app.deps import get_current_user, get_optional_user
 from app.game_options import GAMES, RANKS, ROLES
 from app.models import (
-    ContactRequest,
-    ContactRequestStatus,
     ModerationStatus,
     User,
     UserGameRank,
@@ -18,8 +13,6 @@ from app.models import (
     UserRole,
 )
 from app.schemas import (
-    ContactUserOut,
-    ContactsListOut,
     GameOptionsOut,
     GameRankOut,
     OwnProfileOut,
@@ -55,8 +48,8 @@ def _parse_contacts(profile: UserProfile) -> list[SocialLinkOut]:
                 out.append(SocialLinkOut(label=str(key), url=url, is_public=True))
     has_tg = any(c.label.lower() in _TELEGRAM_LABELS for c in out)
     if profile.telegram_url and not has_tg:
-        out.insert(0, SocialLinkOut(label="Telegram", url=profile.telegram_url, is_public=True))
-    return out[:3]
+        out.insert(0, SocialLinkOut(label="Telegram", url=profile.telegram_url, is_public=False))
+    return out[:1]
 
 
 def _game_outs(profile: UserProfile) -> list[GameRankOut]:
@@ -75,7 +68,6 @@ def _to_public(
     profile: UserProfile,
     *,
     include_private: bool = False,
-    contact_status: str | None = None,
 ) -> PublicProfileOut:
     contacts = _parse_contacts(profile)
     visible = contacts if include_private else [c for c in contacts if c.is_public]
@@ -92,7 +84,6 @@ def _to_public(
         games=_game_outs(profile),
         moderation_status=profile.moderation_status,
         is_public=profile.is_public,
-        contact_status=contact_status,
     )
 
 
@@ -126,7 +117,7 @@ def _can_edit(_user: User, profile: UserProfile) -> bool:
 
 
 def _to_own(user: User, profile: UserProfile) -> OwnProfileOut:
-    public = _to_public(profile, include_private=True, contact_status="self")
+    public = _to_public(profile, include_private=True)
     data = public.model_dump()
     data.update(
         {
@@ -145,76 +136,6 @@ def _get_own_profile(db: Session, user_id: int) -> UserProfile | None:
         select(UserProfile)
         .where(UserProfile.user_id == user_id)
         .options(selectinload(UserProfile.game_ranks))
-    )
-
-
-def _pair_requests(db: Session, user_a: int, user_b: int) -> list[ContactRequest]:
-    return list(
-        db.scalars(
-            select(ContactRequest).where(
-                or_(
-                    and_(ContactRequest.requester_id == user_a, ContactRequest.target_id == user_b),
-                    and_(ContactRequest.requester_id == user_b, ContactRequest.target_id == user_a),
-                )
-            )
-        ).all()
-    )
-
-
-def _status_for_viewer(db: Session, viewer_id: int, target_id: int) -> str:
-    if viewer_id == target_id:
-        return "self"
-    rows = _pair_requests(db, viewer_id, target_id)
-    if not rows:
-        return "none"
-    if any(r.status == ContactRequestStatus.accepted.value for r in rows):
-        return "accepted"
-    outgoing = next((r for r in rows if r.requester_id == viewer_id), None)
-    incoming = next((r for r in rows if r.target_id == viewer_id), None)
-    if outgoing and outgoing.status == ContactRequestStatus.pending.value:
-        return "pending_out"
-    if incoming and incoming.status == ContactRequestStatus.pending.value:
-        return "pending_in"
-    return "none"
-
-
-def _has_accepted(db: Session, user_a: int, user_b: int) -> bool:
-    return any(r.status == ContactRequestStatus.accepted.value for r in _pair_requests(db, user_a, user_b))
-
-
-def _roles_contain(role_slug: str):
-    payloads = [json.dumps([role_slug], separators=(",", ":"))]
-    if role_slug.isdigit():
-        payloads.append(json.dumps([int(role_slug)], separators=(",", ":")))
-    conds = [UserGameRank.roles.op("@>")(cast(payload, JSONB)) for payload in payloads]
-    conds.append(cast(UserGameRank.roles, String).contains(f'"{role_slug}"'))
-    return or_(*conds)
-
-
-def _nickname_for(db: Session, user_id: int) -> str:
-    profile = db.scalar(select(UserProfile).where(UserProfile.user_id == user_id))
-    if profile and profile.nickname:
-        return profile.nickname
-    user = db.get(User, user_id)
-    return (user.username if user else "") or f"#{user_id}"
-
-
-def _contact_item(db: Session, row: ContactRequest, viewer_id: int) -> ContactUserOut:
-    other_id = row.target_id if row.requester_id == viewer_id else row.requester_id
-    direction = "outgoing" if row.requester_id == viewer_id else "incoming"
-    accepted = row.status == ContactRequestStatus.accepted.value or _has_accepted(db, viewer_id, other_id)
-    contacts = None
-    if accepted:
-        other_profile = _get_own_profile(db, other_id)
-        if other_profile:
-            contacts = _parse_contacts(other_profile)
-    return ContactUserOut(
-        request_id=row.id,
-        user_id=other_id,
-        nickname=_nickname_for(db, other_id),
-        direction=direction,
-        status="accepted" if accepted else row.status,
-        contacts=contacts,
     )
 
 
@@ -327,78 +248,9 @@ def cancel_my_profile(user: User = Depends(get_current_user), db: Session = Depe
     return _to_own(user, profile)  # type: ignore[arg-type]
 
 
-@router.get("/me/contacts", response_model=ContactsListOut)
-def list_my_contacts(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    rows = list(
-        db.scalars(
-            select(ContactRequest)
-            .where(
-                or_(ContactRequest.requester_id == user.id, ContactRequest.target_id == user.id),
-            )
-            .order_by(ContactRequest.updated_at.desc())
-        ).all()
-    )
-    incoming: list[ContactUserOut] = []
-    outgoing: list[ContactUserOut] = []
-    seen_others: set[int] = set()
-    for row in rows:
-        if row.status == ContactRequestStatus.declined.value and row.target_id == user.id:
-            continue
-        other_id = row.target_id if row.requester_id == user.id else row.requester_id
-        if other_id in seen_others:
-            continue
-        seen_others.add(other_id)
-        item = _contact_item(db, row, user.id)
-        if item.direction == "incoming":
-            incoming.append(item)
-        else:
-            outgoing.append(item)
-    return ContactsListOut(incoming=incoming, outgoing=outgoing)
-
-
-@router.post("/me/contacts/{request_id}/accept", response_model=ContactUserOut)
-def accept_contact(
-    request_id: int,
-    user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    row = db.get(ContactRequest, request_id)
-    if not row or row.target_id != user.id:
-        raise HTTPException(status_code=404, detail="Request not found")
-    row.status = ContactRequestStatus.accepted.value
-    reverse = db.scalar(
-        select(ContactRequest).where(
-            ContactRequest.requester_id == user.id,
-            ContactRequest.target_id == row.requester_id,
-        )
-    )
-    if reverse:
-        reverse.status = ContactRequestStatus.accepted.value
-    db.commit()
-    db.refresh(row)
-    return _contact_item(db, row, user.id)
-
-
-@router.post("/me/contacts/{request_id}/decline", response_model=ContactUserOut)
-def decline_contact(
-    request_id: int,
-    user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    row = db.get(ContactRequest, request_id)
-    if not row or row.target_id != user.id:
-        raise HTTPException(status_code=404, detail="Request not found")
-    row.status = ContactRequestStatus.declined.value
-    db.commit()
-    db.refresh(row)
-    return _contact_item(db, row, user.id)
-
-
 @router.get("/users", response_model=list[PublicProfileOut])
 def list_public_profiles(
     q: str | None = Query(None, description="Search by nickname"),
-    game: str | None = Query(None, description="Filter by game slug"),
-    role: str | None = Query(None, description="Filter by role 1–5"),
     db: Session = Depends(get_db),
 ):
     filters = [
@@ -414,18 +266,6 @@ def list_public_profiles(
                 User.username.ilike(f"%{search}%"),
             )
         )
-    game_slug = (game or "").strip().lower()
-    role_slug = (role or "").strip()
-    if role_slug not in {"1", "2", "3", "4", "5"}:
-        role_slug = ""
-    rank_match = None
-    if game_slug:
-        rank_match = UserGameRank.game == game_slug
-    if role_slug:
-        role_cond = _roles_contain(role_slug)
-        rank_match = role_cond if rank_match is None else and_(rank_match, role_cond)
-    if rank_match is not None:
-        filters.append(UserProfile.game_ranks.any(rank_match))
 
     rows = db.scalars(
         select(UserProfile)
@@ -435,66 +275,6 @@ def list_public_profiles(
         .order_by(UserProfile.user_id)
     ).all()
     return [_to_public(p) for p in rows]
-
-
-@router.post("/users/{user_id}/contact-request", response_model=ContactUserOut)
-def request_contact(
-    user_id: int,
-    user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    if user_id == user.id:
-        raise HTTPException(status_code=400, detail="Cannot request your own contacts")
-    target = _get_own_profile(db, user_id)
-    target_user = db.get(User, user_id)
-    if (
-        not target
-        or not target_user
-        or target.moderation_status != ModerationStatus.approved.value
-        or not target.is_public
-        or target_user.role in (UserRole.admin.value, UserRole.moderator.value)
-    ):
-        raise HTTPException(status_code=404, detail="Profile not found")
-
-    existing = _pair_requests(db, user.id, user_id)
-    outgoing = next((r for r in existing if r.requester_id == user.id), None)
-    incoming = next((r for r in existing if r.target_id == user.id), None)
-
-    if any(r.status == ContactRequestStatus.accepted.value for r in existing):
-        row = outgoing or incoming
-        return _contact_item(db, row, user.id)  # type: ignore[arg-type]
-
-    if incoming and incoming.status == ContactRequestStatus.pending.value:
-        incoming.status = ContactRequestStatus.accepted.value
-        if outgoing:
-            outgoing.status = ContactRequestStatus.accepted.value
-        else:
-            outgoing = ContactRequest(
-                requester_id=user.id,
-                target_id=user_id,
-                status=ContactRequestStatus.accepted.value,
-            )
-            db.add(outgoing)
-        db.commit()
-        db.refresh(incoming)
-        return _contact_item(db, incoming, user.id)
-
-    if outgoing:
-        if outgoing.status == ContactRequestStatus.declined.value:
-            outgoing.status = ContactRequestStatus.pending.value
-            db.commit()
-            db.refresh(outgoing)
-        return _contact_item(db, outgoing, user.id)
-
-    row = ContactRequest(
-        requester_id=user.id,
-        target_id=user_id,
-        status=ContactRequestStatus.pending.value,
-    )
-    db.add(row)
-    db.commit()
-    db.refresh(row)
-    return _contact_item(db, row, user.id)
 
 
 @router.get("/users/{user_id}", response_model=PublicProfileOut)
@@ -511,18 +291,15 @@ def get_public_profile(
     if not profile:
         raise HTTPException(status_code=404, detail="Profile not found")
 
-    include_private = False
-    contact_status: str | None = None
-    if viewer is not None:
-        contact_status = _status_for_viewer(db, viewer.id, user_id)
-        if viewer.id == user_id or viewer.role in (UserRole.admin.value, UserRole.moderator.value):
-            include_private = True
-            return _to_public(profile, include_private=True, contact_status=contact_status)
+    if viewer is not None and (
+        viewer.id == user_id or viewer.role in (UserRole.admin.value, UserRole.moderator.value)
+    ):
+        return _to_public(profile, include_private=True)
 
     if (
         profile.moderation_status == ModerationStatus.approved.value
         and profile.is_public
     ):
-        return _to_public(profile, include_private=include_private, contact_status=contact_status)
+        return _to_public(profile)
 
     raise HTTPException(status_code=404, detail="Profile not found")

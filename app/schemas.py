@@ -37,7 +37,7 @@ class RegisterIn(BaseModel):
             raise ValueError("username must be 3–10 characters")
         if not _USERNAME_RE.fullmatch(s):
             raise ValueError("username must contain letters only")
-        return s.lower()
+        return s
 
     @field_validator("email")
     @classmethod
@@ -74,7 +74,7 @@ from app.game_options import GAME_SLUGS, RANKS, ROLE_SLUGS
 
 _SOCIAL_LABEL_RE = re.compile(r"^[A-Za-zА-Яа-яЁё0-9 ._-]{1,40}$")
 _SAFE_URL_RE = re.compile(r"^https?://", re.IGNORECASE)
-_MAX_CONTACTS = 3
+_MAX_CONTACTS = 1
 _MAX_ROLES = 5
 
 
@@ -215,7 +215,7 @@ class ProfileGamesUpdateIn(BaseModel):
 
 
 class ProfileContactsUpdateIn(BaseModel):
-    """Social / messenger links — saved immediately. Private ones stay hidden until a contact request is accepted."""
+    """Telegram link — saved immediately. Shown on the public profile only if marked public."""
 
     contacts: list[SocialLinkIn] = Field(default_factory=list)
 
@@ -223,7 +223,7 @@ class ProfileContactsUpdateIn(BaseModel):
     @classmethod
     def contacts_ok(cls, v: list[SocialLinkIn]) -> list[SocialLinkIn]:
         if len(v) > _MAX_CONTACTS:
-            raise ValueError("at most 3 contact links")
+            raise ValueError("at most 1 contact link")
         return v
 
 

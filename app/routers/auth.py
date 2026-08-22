@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from jwt.exceptions import InvalidTokenError
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -30,7 +30,7 @@ def register(body: RegisterIn, db: Session = Depends(get_db)):
     email = body.email.lower()
     if db.scalar(select(User).where(User.email == email)):
         raise HTTPException(status_code=400, detail="Email already registered")
-    if db.scalar(select(User).where(User.username == body.username)):
+    if db.scalar(select(User).where(func.lower(User.username) == body.username.lower())):
         raise HTTPException(status_code=400, detail="Username already taken")
 
     user = User(
