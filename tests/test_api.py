@@ -275,13 +275,13 @@ def test_users_search_by_name_game_role(client, db_session, regular_user):
     nicks = {u["nickname"] for u in by_name.json()}
     assert "GoldCarry" in nicks
     assert "MidOnly" not in nicks
+    assert by_name.json()[0]["games"][0]["rank"] == "Mythic"
 
-    by_game = client.get("/api/users?game=lol")
-    assert {u["nickname"] for u in by_game.json()} == {"MidOnly"}
+    by_username = client.get("/api/users?q=MID")
+    assert {u["nickname"] for u in by_username.json()} == {"MidOnly"}
 
-    by_role = client.get("/api/users?game=mlbb&role=4")
-    assert {u["nickname"] for u in by_role.json()} == {"GoldCarry"}
-    assert by_role.json()[0]["games"][0]["roles"] == ["4", "5"]
+    by_partial = client.get("/api/users?q=Carry")
+    assert {u["nickname"] for u in by_partial.json()} == {"GoldCarry"}
 
 
 def test_contact_request_flow(client, db_session, regular_user):

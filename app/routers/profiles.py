@@ -260,10 +260,11 @@ def list_public_profiles(
     ]
     search = (q or "").strip()
     if search:
+        pattern = f"%{search}%"
         filters.append(
             or_(
-                UserProfile.nickname.ilike(f"%{search}%"),
-                User.username.ilike(f"%{search}%"),
+                UserProfile.nickname.ilike(pattern),
+                User.username.ilike(pattern),
             )
         )
 
