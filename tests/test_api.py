@@ -243,7 +243,7 @@ def _publish_profile(db_session, user, nickname, games=None, contacts=None):
     return profile
 
 
-def test_users_search_by_name_game_role(client, db_session, regular_user):
+def test_list_public_users(client, db_session, regular_user):
     from app.models import User
     from app.security import hash_password
 
@@ -261,27 +261,22 @@ def test_users_search_by_name_game_role(client, db_session, regular_user):
         db_session,
         regular_user,
         "GoldCarry",
-        games=[{"game": "mlbb", "rank": "Mythic", "roles": ["4", "5"]}],
+        games=[{"game": "mlbb", "rank": "Mythic", "roles": []}],
     )
     _publish_profile(
         db_session,
         other,
         "MidOnly",
-        games=[{"game": "lol", "rank": "Gold", "roles": ["3"]}],
+        games=[{"game": "lol", "rank": "Gold", "roles": []}],
     )
 
-    by_name = client.get("/api/users?q=gold")
-    assert by_name.status_code == 200
-    nicks = {u["nickname"] for u in by_name.json()}
+    res = client.get("/api/users")
+    assert res.status_code == 200
+    nicks = {u["nickname"] for u in res.json()}
     assert "GoldCarry" in nicks
-    assert "MidOnly" not in nicks
-    assert by_name.json()[0]["games"][0]["rank"] == "Mythic"
-
-    by_username = client.get("/api/users?q=MID")
-    assert {u["nickname"] for u in by_username.json()} == {"MidOnly"}
-
-    by_partial = client.get("/api/users?q=Carry")
-    assert {u["nickname"] for u in by_partial.json()} == {"GoldCarry"}
+    assert "MidOnly" in nicks
+    gold = next(u for u in res.json() if u["nickname"] == "GoldCarry")
+    assert gold["games"][0]["rank"] == "Mythic"
 
 
 def test_contact_request_flow(client, db_session, regular_user):

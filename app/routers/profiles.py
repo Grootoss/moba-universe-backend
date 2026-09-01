@@ -1,5 +1,5 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import or_, select
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from app.database import get_db
@@ -249,24 +249,12 @@ def cancel_my_profile(user: User = Depends(get_current_user), db: Session = Depe
 
 
 @router.get("/users", response_model=list[PublicProfileOut])
-def list_public_profiles(
-    q: str | None = Query(None, description="Search by nickname"),
-    db: Session = Depends(get_db),
-):
+def list_public_profiles(db: Session = Depends(get_db)):
     filters = [
         UserProfile.moderation_status == ModerationStatus.approved.value,
         UserProfile.is_public.is_(True),
         User.role.not_in((UserRole.admin.value, UserRole.moderator.value)),
     ]
-    search = (q or "").strip()
-    if search:
-        pattern = f"%{search}%"
-        filters.append(
-            or_(
-                UserProfile.nickname.ilike(pattern),
-                User.username.ilike(pattern),
-            )
-        )
 
     rows = db.scalars(
         select(UserProfile)
