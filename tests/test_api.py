@@ -1,5 +1,7 @@
 from tests.conftest import auth_header
 from app.models import Category
+from app.config import get_settings
+import re
 
 
 def test_register_and_login(client):
@@ -195,11 +197,12 @@ def test_health(client):
 def test_robots_txt(client):
     res = client.get("/robots.txt")
     assert res.status_code == 200
-    assert "Sitemap:" in res.text
-    assert "Allow: /ru/evergreen" in res.text
-    assert "Allow: /en/evergreen" in res.text
+    base = get_settings().site_url.rstrip("/")
+    assert f"Sitemap: {base}/sitemap.xml" in res.text
+    assert "Allow: /" in res.text
     assert "Disallow: /admin" in res.text
     assert "Disallow: /admin/" in res.text
+    assert "Disallow: /api/" in res.text
 
 
 def test_sitemap_includes_published_article(client, published_article):
@@ -212,6 +215,27 @@ def test_sitemap_includes_published_article(client, published_article):
     assert "/en/evergreen" in res.text
     assert "/ru</loc>" in res.text
     assert "/en</loc>" in res.text
+    base = get_settings().site_url.rstrip("/")
+    assert f'hreflang="x-default" href="{base}/ru"' in res.text
+    xdefaults = re.findall(r'hreflang="x-default" href="([^"]+)"', res.text)
+    assert xdefaults
+    assert all("/ru" in href for href in xdefaults)
+    # Hubs must not fake lastmod=today; only dated records get <lastmod>
+    assert res.text.count("<lastmod>") == 2
+    stamp = (published_article.updated_at or published_article.created_at).date().isoformat()
+    assert f"<lastmod>{stamp}</lastmod>" in res.text
+
+
+def test_sitemap_includes_public_user_not_admin(client, db_session, regular_user, admin_user):
+    _publish_profile(db_session, regular_user, "GoldCarry")
+    _publish_profile(db_session, admin_user, "SiteAdmin")
+
+    res = client.get("/sitemap.xml")
+    assert res.status_code == 200
+    assert f"/ru/user/{regular_user.id}" in res.text
+    assert f"/en/user/{regular_user.id}" in res.text
+    assert f"/ru/user/{admin_user.id}</loc>" not in res.text
+    assert f"/en/user/{admin_user.id}</loc>" not in res.text
 
 
 def _publish_profile(db_session, user, nickname, games=None, contacts=None):

@@ -1,6 +1,10 @@
 """SEO helpers: robots.txt and dynamic sitemap.xml."""
 
-from datetime import datetime, timezone
+from __future__ import annotations
+
+import logging
+from datetime import date, datetime
+from xml.sax.saxutils import escape
 
 from fastapi import APIRouter, Depends, Response
 from sqlalchemy import select
@@ -12,10 +16,72 @@ from app.models import Article, ArticleStatus, ModerationStatus, User, UserProfi
 
 router = APIRouter(tags=["seo"])
 settings = get_settings()
+logger = logging.getLogger(__name__)
+
+_STAFF_ROLES = (UserRole.admin.value, UserRole.moderator.value)
 
 
 def _base() -> str:
     return settings.site_url.rstrip("/")
+
+
+def _xml(url: str) -> str:
+    return escape(url, {'"': "&quot;", "'": "&apos;"})
+
+
+def _lastmod(value: datetime | date | None) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.date().isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    return None
+
+
+def _url_block(loc: str, alt_loc: str, lang: str, lastmod: str | None) -> list[str]:
+    alt_lang = "en" if lang == "ru" else "ru"
+    default_loc = loc if lang == "ru" else alt_loc
+    lines = [
+        "  <url>",
+        f"    <loc>{_xml(loc)}</loc>",
+        f'    <xhtml:link rel="alternate" hreflang="{lang}" href="{_xml(loc)}" />',
+        f'    <xhtml:link rel="alternate" hreflang="{alt_lang}" href="{_xml(alt_loc)}" />',
+        f'    <xhtml:link rel="alternate" hreflang="x-default" href="{_xml(default_loc)}" />',
+    ]
+    if lastmod:
+        lines.append(f"    <lastmod>{lastmod}</lastmod>")
+    lines.append("  </url>")
+    return lines
+
+
+def _hub_entries(base: str) -> list[tuple[str, str, str, str | None]]:
+    """Static public hubs. No lastmod — Google treats a fake 'today' as untrustworthy."""
+    pairs = (
+        ("/ru", "/en"),
+        ("/ru/evergreen", "/en/evergreen"),
+        ("/ru/users", "/en/users"),
+        ("/ru/privacy", "/en/privacy"),
+        ("/ru/terms", "/en/terms"),
+    )
+    entries: list[tuple[str, str, str, str | None]] = []
+    for ru_path, en_path in pairs:
+        entries.append((f"{base}{ru_path}", f"{base}{en_path}", "ru", None))
+        entries.append((f"{base}{en_path}", f"{base}{ru_path}", "en", None))
+    return entries
+
+
+def _render(entries: list[tuple[str, str, str, str | None]]) -> str:
+    parts = [
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" '
+        'xmlns:xhtml="http://www.w3.org/1999/xhtml">',
+    ]
+    for loc, alt_loc, lang, lastmod in entries:
+        parts.extend(_url_block(loc, alt_loc, lang, lastmod))
+    parts.append("</urlset>")
+    parts.append("")
+    return "\n".join(parts)
 
 
 @router.get("/robots.txt", response_class=Response)
@@ -24,18 +90,6 @@ def robots_txt():
         [
             "User-agent: *",
             "Allow: /",
-            "Allow: /ru/",
-            "Allow: /en/",
-            "Allow: /ru/evergreen",
-            "Allow: /en/evergreen",
-            "Allow: /ru/privacy",
-            "Allow: /en/privacy",
-            "Allow: /ru/terms",
-            "Allow: /en/terms",
-            "Allow: /ru/users",
-            "Allow: /en/users",
-            "Allow: /ru/user/",
-            "Allow: /en/user/",
             "Disallow: /admin",
             "Disallow: /admin/",
             "Disallow: /profile",
@@ -58,64 +112,43 @@ def robots_txt():
 @router.get("/sitemap.xml", response_class=Response)
 def sitemap_xml(db: Session = Depends(get_db)):
     base = _base()
-    now = datetime.now(timezone.utc).date().isoformat()
+    entries = _hub_entries(base)
 
-    urls: list[tuple[str, str, str, str, str]] = [
-        (f"{base}/ru", f"{base}/en", now, "daily", "ru"),
-        (f"{base}/en", f"{base}/ru", now, "daily", "en"),
-        (f"{base}/ru/evergreen", f"{base}/en/evergreen", now, "daily", "ru"),
-        (f"{base}/en/evergreen", f"{base}/ru/evergreen", now, "daily", "en"),
-        (f"{base}/ru/users", f"{base}/en/users", now, "daily", "ru"),
-        (f"{base}/en/users", f"{base}/ru/users", now, "daily", "en"),
-        (f"{base}/ru/privacy", f"{base}/en/privacy", now, "monthly", "ru"),
-        (f"{base}/en/privacy", f"{base}/ru/privacy", now, "monthly", "en"),
-        (f"{base}/ru/terms", f"{base}/en/terms", now, "monthly", "ru"),
-        (f"{base}/en/terms", f"{base}/ru/terms", now, "monthly", "en"),
-    ]
+    try:
+        articles = db.execute(
+            select(Article.slug, Article.updated_at, Article.created_at)
+            .where(Article.status == ArticleStatus.published.value)
+            .order_by(Article.id)
+        ).all()
+        for slug, updated_at, created_at in articles:
+            if not slug:
+                continue
+            stamp = _lastmod(updated_at) or _lastmod(created_at)
+            entries.append((f"{base}/ru/evergreen/{slug}", f"{base}/en/evergreen/{slug}", "ru", stamp))
+            entries.append((f"{base}/en/evergreen/{slug}", f"{base}/ru/evergreen/{slug}", "en", stamp))
+    except Exception:
+        logger.exception("sitemap: failed to load articles")
+        db.rollback()
 
-    articles = db.scalars(
-        select(Article)
-        .where(Article.status == ArticleStatus.published.value)
-        .order_by(Article.id)
-    ).all()
-    for a in articles:
-        lastmod = a.updated_at or a.created_at
-        stamp = lastmod.date().isoformat() if lastmod else now
-        urls.append((f"{base}/ru/evergreen/{a.slug}", f"{base}/en/evergreen/{a.slug}", stamp, "weekly", "ru"))
-        urls.append((f"{base}/en/evergreen/{a.slug}", f"{base}/ru/evergreen/{a.slug}", stamp, "weekly", "en"))
+    try:
+        profiles = db.execute(
+            select(UserProfile.user_id, UserProfile.updated_at, UserProfile.created_at)
+            .join(User, UserProfile.user_id == User.id)
+            .where(
+                UserProfile.moderation_status == ModerationStatus.approved.value,
+                UserProfile.is_public.is_(True),
+                User.role.notin_(_STAFF_ROLES),
+            )
+            .order_by(UserProfile.user_id)
+        ).all()
+        for user_id, updated_at, created_at in profiles:
+            if not user_id:
+                continue
+            stamp = _lastmod(updated_at) or _lastmod(created_at)
+            entries.append((f"{base}/ru/user/{user_id}", f"{base}/en/user/{user_id}", "ru", stamp))
+            entries.append((f"{base}/en/user/{user_id}", f"{base}/ru/user/{user_id}", "en", stamp))
+    except Exception:
+        logger.exception("sitemap: failed to load profiles")
+        db.rollback()
 
-    profiles = db.scalars(
-        select(UserProfile)
-        .join(User, UserProfile.user_id == User.id)
-        .where(
-            UserProfile.moderation_status == ModerationStatus.approved.value,
-            UserProfile.is_public.is_(True),
-            User.role.not_in((UserRole.admin.value, UserRole.moderator.value)),
-        )
-        .order_by(UserProfile.user_id)
-    ).all()
-    for p in profiles:
-        lastmod = p.updated_at or p.created_at
-        stamp = lastmod.date().isoformat() if lastmod else now
-        urls.append((f"{base}/ru/user/{p.user_id}", f"{base}/en/user/{p.user_id}", stamp, "weekly", "ru"))
-        urls.append((f"{base}/en/user/{p.user_id}", f"{base}/ru/user/{p.user_id}", stamp, "weekly", "en"))
-
-    parts = [
-        '<?xml version="1.0" encoding="UTF-8"?>',
-        '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:xhtml="http://www.w3.org/1999/xhtml">',
-    ]
-    for loc, alt_loc, lastmod, changefreq, lang in urls:
-        alt_lang = "en" if lang == "ru" else "ru"
-        default_loc = loc if lang == "en" else alt_loc
-        parts.append("  <url>")
-        parts.append(f"    <loc>{loc}</loc>")
-        parts.append(f'    <xhtml:link rel="alternate" hreflang="{lang}" href="{loc}" />')
-        parts.append(f'    <xhtml:link rel="alternate" hreflang="{alt_lang}" href="{alt_loc}" />')
-        parts.append(f'    <xhtml:link rel="alternate" hreflang="x-default" href="{default_loc}" />')
-        parts.append(f"    <lastmod>{lastmod}</lastmod>")
-        parts.append(f"    <changefreq>{changefreq}</changefreq>")
-        parts.append("  </url>")
-    parts.append("</urlset>")
-    parts.append("")
-
-    return Response(content="\n".join(parts), media_type="application/xml; charset=utf-8")
+    return Response(content=_render(entries), media_type="application/xml")
