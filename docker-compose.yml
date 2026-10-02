@@ -7,7 +7,7 @@ services:
     environment:
       # Postgres runs on the HOST, not in Compose
       DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://moba:moba@host.docker.internal:5432/mobauniverse}
-      JWT_SECRET: ${JWT_SECRET:-change-me-in-production}
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,https://mobauniverse.com}
       SITE_URL: ${SITE_URL:-http://localhost:5173}
     extra_hosts:

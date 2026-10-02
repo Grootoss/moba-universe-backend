@@ -2,6 +2,7 @@
 
 from functools import lru_cache
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -14,7 +15,7 @@ class Settings(BaseSettings):
     )
 
     database_url: str = "postgresql+psycopg://moba:moba@127.0.0.1:5432/mobauniverse"
-    jwt_secret: str = "change-me-to-a-long-random-string"
+    jwt_secret: str = Field(validation_alias="JWT_SECRET")
     jwt_algorithm: str = "HS256"
     jwt_expire_minutes: int = 30
     jwt_refresh_expire_days: int = 14
