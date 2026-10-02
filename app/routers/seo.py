@@ -3,30 +3,38 @@
 from __future__ import annotations
 
 import logging
+import re
 from datetime import date, datetime
 from xml.sax.saxutils import escape
 
-from fastapi import APIRouter, Depends, Response
-from sqlalchemy import select
-from sqlalchemy.orm import Session
+from email.utils import format_datetime
 
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi.responses import HTMLResponse
+from sqlalchemy import select
+from sqlalchemy.orm import Session, selectinload
+
+from app.article_html import render_article_html
 from app.config import get_settings
-from app.database import get_db
-from app.models import Article, ArticleStatus, ModerationStatus, User, UserProfile, UserRole
+from app.database import SessionLocal, get_db
+from app.indexnow import INDEXNOW_KEY
+from app.models import Article, ArticleStatus
 
 router = APIRouter(tags=["seo"])
 settings = get_settings()
 logger = logging.getLogger(__name__)
-
-_STAFF_ROLES = (UserRole.admin.value, UserRole.moderator.value)
 
 
 def _base() -> str:
     return settings.site_url.rstrip("/")
 
 
+_ILLEGAL_XML = re.compile(r"[\x00-\x08\x0B\x0C\x0E-\x1F]")
+
+
 def _xml(url: str) -> str:
-    return escape(url, {'"': "&quot;", "'": "&apos;"})
+    clean = _ILLEGAL_XML.sub("", url)
+    return escape(clean, {'"': "&quot;", "'": "&apos;"})
 
 
 def _lastmod(value: datetime | date | None) -> str | None:
@@ -84,7 +92,7 @@ def _render(entries: list[tuple[str, str, str, str | None]]) -> str:
     return "\n".join(parts)
 
 
-@router.get("/robots.txt", response_class=Response)
+@router.api_route("/robots.txt", methods=["GET", "HEAD"], response_class=Response)
 def robots_txt():
     body = "\n".join(
         [
@@ -102,6 +110,7 @@ def robots_txt():
             "Disallow: /ru/register",
             "Disallow: /en/register",
             "Disallow: /api/",
+            "Clean-param: utm_source&utm_medium&utm_campaign&utm_content&utm_term&gclid&yclid&fbclid",
             f"Sitemap: {_base()}/sitemap.xml",
             "",
         ]
@@ -109,8 +118,14 @@ def robots_txt():
     return Response(content=body, media_type="text/plain; charset=utf-8")
 
 
-@router.get("/sitemap.xml", response_class=Response)
-def sitemap_xml(db: Session = Depends(get_db)):
+def _safe_rollback(db) -> None:
+    try:
+        db.rollback()
+    except Exception:
+        logger.exception("sitemap: rollback failed")
+
+
+def _load_entries(db) -> list[tuple[str, str, str, str | None]]:
     base = _base()
     entries = _hub_entries(base)
 
@@ -128,27 +143,126 @@ def sitemap_xml(db: Session = Depends(get_db)):
             entries.append((f"{base}/en/evergreen/{slug}", f"{base}/ru/evergreen/{slug}", "en", stamp))
     except Exception:
         logger.exception("sitemap: failed to load articles")
-        db.rollback()
+        _safe_rollback(db)
 
+    return entries
+
+
+def _open_session(request: Request):
+    """Use the test override when present; otherwise open a short-lived session."""
+    override = request.app.dependency_overrides.get(get_db)
+    if override is not None:
+        gen = override()
+        return next(gen), False
+    return SessionLocal(), True
+
+
+def _build_sitemap(request: Request) -> str:
+    """Always return XML. A dead database must not become HTTP 500."""
+    db = None
+    owned = False
     try:
-        profiles = db.execute(
-            select(UserProfile.user_id, UserProfile.updated_at, UserProfile.created_at)
-            .join(User, UserProfile.user_id == User.id)
-            .where(
-                UserProfile.moderation_status == ModerationStatus.approved.value,
-                UserProfile.is_public.is_(True),
-                User.role.notin_(_STAFF_ROLES),
-            )
-            .order_by(UserProfile.user_id)
-        ).all()
-        for user_id, updated_at, created_at in profiles:
-            if not user_id:
-                continue
-            stamp = _lastmod(updated_at) or _lastmod(created_at)
-            entries.append((f"{base}/ru/user/{user_id}", f"{base}/en/user/{user_id}", "ru", stamp))
-            entries.append((f"{base}/en/user/{user_id}", f"{base}/ru/user/{user_id}", "en", stamp))
+        db, owned = _open_session(request)
+        return _render(_load_entries(db))
     except Exception:
-        logger.exception("sitemap: failed to load profiles")
-        db.rollback()
+        logger.exception("sitemap: failed to build")
+        return _render(_hub_entries(_base()))
+    finally:
+        if owned and db is not None:
+            try:
+                db.close()
+            except Exception:
+                logger.exception("sitemap: close failed")
 
-    return Response(content=_render(entries), media_type="application/xml")
+
+@router.api_route("/sitemap.xml", methods=["GET", "HEAD"], response_class=Response)
+def sitemap_xml(request: Request):
+    # FastAPI 0.139 registers GET without implicit HEAD. Crawlers send HEAD;
+    # a 405 with Content-Length and an empty body stalls the nginx upstream
+    # until proxy_read_timeout and the next real GET comes back as 500.
+    return Response(
+        content=_build_sitemap(request),
+        media_type="application/xml",
+        headers={"Cache-Control": "public, max-age=300"},
+    )
+
+
+def _published_articles(db: Session) -> list[Article]:
+    rows = db.scalars(
+        select(Article)
+        .where(Article.status == ArticleStatus.published.value)
+        .options(selectinload(Article.translations))
+        .order_by(Article.id.desc())
+    ).all()
+    return list(rows)
+
+
+@router.api_route("/feed.xml", methods=["GET", "HEAD"], response_class=Response)
+def feed_xml(db: Session = Depends(get_db)):
+    base = _base()
+    items: list[str] = []
+    for article in _published_articles(db):
+        by_lang = {tr.lang: tr for tr in article.translations}
+        for lang in ("ru", "en"):
+            tr = by_lang.get(lang)
+            if not tr:
+                continue
+            link = f"{base}/{lang}/evergreen/{article.slug}"
+            when = article.updated_at or article.created_at
+            pub = format_datetime(when) if when else ""
+            items.append(
+                "\n".join(
+                    [
+                        "    <item>",
+                        f"      <title>{_xml(tr.title)}</title>",
+                        f"      <link>{_xml(link)}</link>",
+                        f"      <guid>{_xml(link)}</guid>",
+                        f"      <description>{_xml((tr.excerpt or tr.title)[:300])}</description>",
+                        f"      <pubDate>{pub}</pubDate>",
+                        "    </item>",
+                    ]
+                )
+            )
+    body = "\n".join(
+        [
+            '<?xml version="1.0" encoding="UTF-8"?>',
+            '<rss version="2.0">',
+            "  <channel>",
+            "    <title>Moba Universe</title>",
+            f"    <link>{_xml(base)}/ru/evergreen</link>",
+            "    <description>Moba Universe guides</description>",
+            *items,
+            "  </channel>",
+            "</rss>",
+            "",
+        ]
+    )
+    return Response(content=body, media_type="application/rss+xml")
+
+
+@router.api_route(f"/{INDEXNOW_KEY}.txt", methods=["GET", "HEAD"])
+def indexnow_key_file():
+    return Response(content=INDEXNOW_KEY, media_type="text/plain")
+
+
+@router.get("/seo/page/{lang}/evergreen/{slug}")
+def article_page(lang: str, slug: str, db: Session = Depends(get_db)):
+    if lang not in ("ru", "en"):
+        raise HTTPException(status_code=404, detail="Article not found")
+    article = db.scalar(
+        select(Article)
+        .where(Article.slug == slug, Article.status == ArticleStatus.published.value)
+        .options(selectinload(Article.translations))
+    )
+    if not article:
+        raise HTTPException(status_code=404, detail="Article not found")
+    html = render_article_html(article, lang, _base())
+    if not html:
+        raise HTTPException(status_code=404, detail="Article not found")
+    return HTMLResponse(
+        content=html,
+        headers={
+            "X-Robots-Tag": "index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1",
+            "Cache-Control": "public, max-age=300",
+        },
+    )

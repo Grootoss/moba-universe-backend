@@ -3,7 +3,9 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from app.category_helpers import list_all_categories
+from app.config import get_settings
 from app.database import get_db
+from app.indexnow import article_urls, notify_indexnow
 from app.deps import require_admin, require_moderator
 from app.media import derive_cover_thumb
 from app.models import (
@@ -240,6 +242,8 @@ def admin_create_article(
     db.add(article)
     db.commit()
     db.refresh(article)
+    if article.status == ArticleStatus.published.value:
+        notify_indexnow(get_settings().site_url, article_urls(get_settings().site_url, article.slug))
     article = db.scalar(
         select(Article)
         .where(Article.id == article.id)
@@ -299,6 +303,8 @@ def admin_update_article(
         .where(Article.id == article_id)
         .options(selectinload(Article.translations), selectinload(Article.category))
     )
+    if article and article.status == ArticleStatus.published.value:
+        notify_indexnow(get_settings().site_url, article_urls(get_settings().site_url, article.slug))
     return _article_admin(article)
 
 

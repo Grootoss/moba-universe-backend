@@ -367,8 +367,22 @@ class ArticleListItemOut(BaseModel):
     updated_at: datetime | None = None
 
 
+class ArticleCardOut(BaseModel):
+    """Compact list row: one language, no body and no second locale."""
+
+    id_article: int
+    slug: str
+    category: str | None = None
+    cover_image: str | None = None
+    cover_thumb: str | None = None
+    title: str
+    excerpt: str = ""
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
 class ArticleListOut(BaseModel):
-    items: list[ArticleListItemOut]
+    items: list[ArticleCardOut]
     total: int
     page: int
     page_size: int

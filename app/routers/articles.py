@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session, selectinload
 from app.database import get_db
 from app.media import derive_cover_thumb
 from app.models import Article, ArticleStatus, ArticleTranslation, Category
-from app.schemas import ArticleListItemOut, ArticleListOut
+from app.schemas import ArticleCardOut, ArticleListItemOut, ArticleListOut
 
 router = APIRouter(prefix="/api/evergreen/articles", tags=["articles"])
 
@@ -51,15 +51,25 @@ def _article_flat(article: Article, lang: str) -> ArticleListItemOut:
     )
 
 
-def _map_rows(rows: list[Article], lang: str | None) -> list[ArticleListItemOut]:
-    if lang in ("ru", "en"):
-        return [_article_flat(a, lang) for a in rows]
-    return [_article_to_public(a) for a in rows]
+def _article_card(article: Article, lang: str) -> ArticleCardOut:
+    by_lang = {tr.lang: tr for tr in article.translations}
+    tr = by_lang.get(lang) or by_lang.get("en") or by_lang.get("ru")
+    return ArticleCardOut(
+        id_article=article.id,
+        slug=article.slug,
+        category=article.category.slug if article.category else None,
+        cover_image=article.cover_image,
+        cover_thumb=derive_cover_thumb(article.cover_image, article.cover_thumb),
+        title=tr.title if tr else article.slug,
+        excerpt=(tr.excerpt if tr else "") or "",
+        created_at=article.created_at,
+        updated_at=article.updated_at,
+    )
 
 
 @router.get("")
 def list_articles(
-    lang: str | None = None,
+    lang: str = Query("ru", description="ru or en — list returns that language only"),
     q: str | None = Query(None, description="Search in article titles"),
     category: str | None = Query(None, description="Filter by category slug"),
     page: int = Query(1, ge=1),
@@ -87,7 +97,8 @@ def list_articles(
         .offset((page - 1) * page_size)
         .limit(page_size)
     ).all()
-    items = _map_rows(list(rows), lang)
+    active_lang = lang if lang in ("ru", "en") else "ru"
+    items = [_article_card(a, active_lang) for a in rows]
     if paginated:
         return ArticleListOut(items=items, total=total, page=page, page_size=page_size)
     return items

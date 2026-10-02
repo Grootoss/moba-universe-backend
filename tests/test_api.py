@@ -49,6 +49,18 @@ def test_list_articles_published_only(client, published_article, draft_article):
     slugs = {a["slug"] for a in items}
     assert "mythic-guide" in slugs
     assert "draft-only" not in slugs
+    mythic = next(a for a in items if a["slug"] == "mythic-guide")
+    assert mythic["title"] == "Как апнуть миф"
+    assert mythic["excerpt"] == "Кратко"
+    assert "translations" not in mythic
+    assert "text" not in mythic
+    assert "<p>Текст</p>" not in res.text
+
+    en = client.get("/api/evergreen/articles?lang=en")
+    assert en.status_code == 200
+    en_item = next(a for a in en.json() if a["slug"] == "mythic-guide")
+    assert en_item["title"] == "How to reach Mythic"
+    assert "<p>Text</p>" not in en.text
 
 
 def test_get_article_by_slug(client, published_article):
@@ -203,6 +215,7 @@ def test_robots_txt(client):
     assert "Disallow: /admin" in res.text
     assert "Disallow: /admin/" in res.text
     assert "Disallow: /api/" in res.text
+    assert "Clean-param:" in res.text
 
 
 def test_sitemap_includes_published_article(client, published_article):
@@ -226,16 +239,55 @@ def test_sitemap_includes_published_article(client, published_article):
     assert f"<lastmod>{stamp}</lastmod>" in res.text
 
 
+def test_sitemap_head_and_db_outage(client, monkeypatch):
+    head = client.head("/sitemap.xml")
+    assert head.status_code == 200
+    assert "xml" in head.headers["content-type"]
+
+    def boom(_db):
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr("app.routers.seo._load_entries", boom)
+    res = client.get("/sitemap.xml")
+    assert res.status_code == 200
+    assert "application/xml" in res.headers["content-type"]
+    assert "/ru</loc>" in res.text
+    assert "/en</loc>" in res.text
+
+
+def test_feed_and_article_html_are_indexable(client, published_article):
+    feed = client.get("/feed.xml")
+    assert feed.status_code == 200
+    assert "application/rss+xml" in feed.headers["content-type"]
+    assert "/ru/evergreen/mythic-guide" in feed.text
+    assert "/en/evergreen/mythic-guide" in feed.text
+
+    page = client.get("/seo/page/ru/evergreen/mythic-guide")
+    assert page.status_code == 200
+    assert "text/html" in page.headers["content-type"]
+    assert "index, follow" in page.text
+    assert "Как апнуть миф" in page.text
+    assert 'rel="canonical"' in page.text
+    assert 'hreflang="x-default"' in page.text
+    assert page.text.index('hreflang="x-default"') < page.text.index("/ru/evergreen/mythic-guide", page.text.index("x-default"))
+
+    missing = client.get("/seo/page/ru/evergreen/no-such-article")
+    assert missing.status_code == 404
+
+    key = client.get("/7f3a9c2e1b84d056a4e8c17b90d2f6a3.txt")
+    assert key.status_code == 200
+    assert key.text == "7f3a9c2e1b84d056a4e8c17b90d2f6a3"
+
+
 def test_sitemap_includes_public_user_not_admin(client, db_session, regular_user, admin_user):
     _publish_profile(db_session, regular_user, "GoldCarry")
     _publish_profile(db_session, admin_user, "SiteAdmin")
 
     res = client.get("/sitemap.xml")
     assert res.status_code == 200
-    assert f"/ru/user/{regular_user.id}" in res.text
-    assert f"/en/user/{regular_user.id}" in res.text
-    assert f"/ru/user/{admin_user.id}</loc>" not in res.text
-    assert f"/en/user/{admin_user.id}</loc>" not in res.text
+    assert f"/ru/user/{regular_user.id}" not in res.text
+    assert f"/en/user/{regular_user.id}" not in res.text
+    assert f"/user/{admin_user.id}" not in res.text
 
 
 def _publish_profile(db_session, user, nickname, games=None, contacts=None):
