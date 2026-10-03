@@ -16,6 +16,17 @@ def verify_password(password: str, password_hash: str) -> bool:
     return bcrypt.checkpw(password.encode(), password_hash.encode())
 
 
+_DUMMY_HASH: str | None = None
+
+
+def dummy_password_hash() -> str:
+    """Same cost as a real check so a missing account is not faster to probe."""
+    global _DUMMY_HASH
+    if _DUMMY_HASH is None:
+        _DUMMY_HASH = hash_password("not-a-real-password")
+    return _DUMMY_HASH
+
+
 def create_access_token(user_id: int, role: str) -> str:
     expire = datetime.now(UTC) + timedelta(minutes=settings.jwt_expire_minutes)
     payload = {

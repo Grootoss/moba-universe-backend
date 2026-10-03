@@ -409,6 +409,61 @@ def test_contact_request_flow(client, db_session, regular_user):
     assert "https://t.me/secret" in urls
 
 
+def test_register_one_account_per_ip_per_day(client):
+    first = {
+        "email": "dayone@example.com",
+        "username": "DayOne",
+        "password": "secret12",
+        "password_confirm": "secret12",
+        "privacy_consent": True,
+    }
+    assert client.post("/api/auth/register", json=first).status_code == 201
+
+    second = {
+        "email": "daytwo@example.com",
+        "username": "DayTwo",
+        "password": "secret12",
+        "password_confirm": "secret12",
+        "privacy_consent": True,
+    }
+    again = client.post("/api/auth/register", json=second)
+    assert again.status_code == 429
+    assert "one account per day" in again.json()["detail"].lower()
+
+    from fastapi.testclient import TestClient
+
+    from main import app
+
+    other_ip = {
+        "email": "otherip@example.com",
+        "username": "OtherIp",
+        "password": "secret12",
+        "password_confirm": "secret12",
+        "privacy_consent": True,
+    }
+    with TestClient(app, client=("203.0.113.9", 1234)) as other:
+        created = other.post("/api/auth/register", json=other_ip)
+    assert created.status_code == 201, created.text
+
+
+def test_login_locks_after_repeated_failures(client, regular_user):
+    from app.rate_limit import LOGIN_MAX_PER_EMAIL
+
+    for _ in range(LOGIN_MAX_PER_EMAIL):
+        res = client.post(
+            "/api/auth/login",
+            json={"email": regular_user.email, "password": "wrongpass"},
+        )
+        assert res.status_code == 401
+
+    locked = client.post(
+        "/api/auth/login",
+        json={"email": regular_user.email, "password": "player1"},
+    )
+    assert locked.status_code == 429
+    assert "too many login attempts" in locked.json()["detail"].lower()
+
+
 def test_profile_options_include_roles(client):
     res = client.get("/api/profile/options")
     assert res.status_code == 200

@@ -1,8 +1,9 @@
 import enum
-from datetime import datetime
+from datetime import date, datetime
 
 from sqlalchemy import (
     Boolean,
+    Date,
     DateTime,
     ForeignKey,
     Integer,
@@ -60,6 +61,7 @@ class User(Base):
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     role: Mapped[str] = mapped_column(String(20), nullable=False, default=UserRole.user.value)
     profile_edit_unlocked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    registration_ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
@@ -69,6 +71,29 @@ class User(Base):
         back_populates="user", uselist=False, cascade="all, delete-orphan"
     )
     articles: Mapped[list["Article"]] = relationship(back_populates="author")
+
+
+class RegistrationSlot(Base):
+    """One successful registration per IP per Moscow calendar day."""
+
+    __tablename__ = "registration_slots"
+    __table_args__ = (UniqueConstraint("ip", "day", name="uq_registration_ip_day"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    ip: Mapped[str] = mapped_column(String(64), nullable=False)
+    day: Mapped[date] = mapped_column(Date, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class LoginAttempt(Base):
+    """Failed password checks. Rows older than the lock window are deleted on the next login."""
+
+    __tablename__ = "login_attempts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    ip: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    email: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
 
 
 class UserProfile(Base):
