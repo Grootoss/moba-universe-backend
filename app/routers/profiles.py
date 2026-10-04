@@ -1,11 +1,13 @@
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.database import get_db
 from app.deps import get_current_user, get_optional_user
 from app.game_options import GAMES, RANKS, ROLES
 from app.models import (
+    ContactRequest,
+    ContactRequestStatus,
     ModerationStatus,
     User,
     UserGameRank,
@@ -13,6 +15,8 @@ from app.models import (
     UserRole,
 )
 from app.schemas import (
+    ContactUserOut,
+    ContactsListOut,
     GameOptionsOut,
     GameRankOut,
     OwnProfileOut,
@@ -49,7 +53,7 @@ def _parse_contacts(profile: UserProfile) -> list[SocialLinkOut]:
     has_tg = any(c.label.lower() in _TELEGRAM_LABELS for c in out)
     if profile.telegram_url and not has_tg:
         out.insert(0, SocialLinkOut(label="Telegram", url=profile.telegram_url, is_public=False))
-    return out[:1]
+    return out
 
 
 def _game_outs(profile: UserProfile) -> list[GameRankOut]:
@@ -68,6 +72,7 @@ def _to_public(
     profile: UserProfile,
     *,
     include_private: bool = False,
+    contact_status: str | None = None,
 ) -> PublicProfileOut:
     contacts = _parse_contacts(profile)
     visible = contacts if include_private else [c for c in contacts if c.is_public]
@@ -84,6 +89,7 @@ def _to_public(
         games=_game_outs(profile),
         moderation_status=profile.moderation_status,
         is_public=profile.is_public,
+        contact_status=contact_status,
     )
 
 
@@ -285,10 +291,127 @@ def get_public_profile(
     ):
         return _to_public(profile, include_private=True)
 
-    if (
+    if not (
         profile.moderation_status == ModerationStatus.approved.value
         and profile.is_public
     ):
-        return _to_public(profile)
+        raise HTTPException(status_code=404, detail="Profile not found")
 
-    raise HTTPException(status_code=404, detail="Profile not found")
+    contact_status = None
+    include_private = False
+    if viewer is not None:
+        row = db.scalar(
+            select(ContactRequest).where(
+                ContactRequest.requester_id == viewer.id,
+                ContactRequest.target_id == user_id,
+            )
+        )
+        if row is not None:
+            contact_status = row.status
+            include_private = row.status == ContactRequestStatus.accepted.value
+    return _to_public(profile, include_private=include_private, contact_status=contact_status)
+
+
+def _nickname(db: Session, user_id: int) -> str:
+    profile = db.scalar(select(UserProfile).where(UserProfile.user_id == user_id))
+    if profile and profile.nickname:
+        return profile.nickname
+    user = db.get(User, user_id)
+    return user.username if user else ""
+
+
+def _contact_out(db: Session, row: ContactRequest, viewer_id: int) -> ContactUserOut:
+    outgoing = row.requester_id == viewer_id
+    other_id = row.target_id if outgoing else row.requester_id
+    contacts = None
+    if outgoing and row.status == ContactRequestStatus.accepted.value:
+        profile = db.scalar(select(UserProfile).where(UserProfile.user_id == row.target_id))
+        contacts = _parse_contacts(profile) if profile else []
+    return ContactUserOut(
+        request_id=row.id,
+        user_id=other_id,
+        nickname=_nickname(db, other_id),
+        direction="outgoing" if outgoing else "incoming",
+        status=row.status,
+        contacts=contacts,
+    )
+
+
+@router.post("/users/{user_id}/contact-request", response_model=ContactUserOut)
+def request_contacts(
+    user_id: int,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if user_id == user.id:
+        raise HTTPException(status_code=400, detail="Cannot request your own contacts")
+    if not db.get(User, user_id):
+        raise HTTPException(status_code=404, detail="User not found")
+    row = db.scalar(
+        select(ContactRequest).where(
+            ContactRequest.requester_id == user.id,
+            ContactRequest.target_id == user_id,
+        )
+    )
+    if row is None:
+        row = ContactRequest(
+            requester_id=user.id,
+            target_id=user_id,
+            status=ContactRequestStatus.pending.value,
+        )
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+    elif row.status == ContactRequestStatus.declined.value:
+        row.status = ContactRequestStatus.pending.value
+        db.commit()
+        db.refresh(row)
+    return _contact_out(db, row, user.id)
+
+
+@router.get("/me/contacts", response_model=ContactsListOut)
+def my_contacts(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    rows = db.scalars(
+        select(ContactRequest)
+        .where(or_(ContactRequest.requester_id == user.id, ContactRequest.target_id == user.id))
+        .order_by(ContactRequest.id)
+    ).all()
+    incoming: list[ContactUserOut] = []
+    outgoing: list[ContactUserOut] = []
+    for row in rows:
+        item = _contact_out(db, row, user.id)
+        if row.target_id == user.id:
+            incoming.append(item)
+        else:
+            outgoing.append(item)
+    return ContactsListOut(incoming=incoming, outgoing=outgoing)
+
+
+@router.post("/me/contacts/{request_id}/accept", response_model=ContactUserOut)
+def accept_contact_request(
+    request_id: int,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    row = db.get(ContactRequest, request_id)
+    if row is None or row.target_id != user.id:
+        raise HTTPException(status_code=404, detail="Request not found")
+    row.status = ContactRequestStatus.accepted.value
+    db.commit()
+    db.refresh(row)
+    return _contact_out(db, row, user.id)
+
+
+@router.post("/me/contacts/{request_id}/decline", response_model=ContactUserOut)
+def decline_contact_request(
+    request_id: int,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    row = db.get(ContactRequest, request_id)
+    if row is None or row.target_id != user.id:
+        raise HTTPException(status_code=404, detail="Request not found")
+    row.status = ContactRequestStatus.declined.value
+    db.commit()
+    db.refresh(row)
+    return _contact_out(db, row, user.id)

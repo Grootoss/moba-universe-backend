@@ -14,4 +14,5 @@ services:
       # Linux Docker: resolve host.docker.internal → host gateway
       - "host.docker.internal:host-gateway"
     ports:
-      - "8000:8000"
+      # Localhost only. A public bind lets clients skip nginx and spoof X-Real-IP.
+      - "127.0.0.1:8000:8000"

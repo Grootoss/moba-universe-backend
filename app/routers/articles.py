@@ -3,6 +3,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.database import get_db
+from app.html_clean import clean_article_html
 from app.media import derive_cover_thumb
 from app.models import Article, ArticleStatus, ArticleTranslation, Category
 from app.schemas import ArticleCardOut, ArticleListItemOut, ArticleListOut
@@ -15,8 +16,8 @@ def _article_to_public(article: Article) -> ArticleListItemOut:
         tr.lang: {
             "title": tr.title,
             "excerpt": tr.excerpt,
-            "text": tr.content,
-            "mlbb_example": tr.mlbb_example or "",
+            "text": clean_article_html(tr.content),
+            "mlbb_example": clean_article_html(tr.mlbb_example),
         }
         for tr in article.translations
     }
@@ -45,7 +46,7 @@ def _article_flat(article: Article, lang: str) -> ArticleListItemOut:
         cover_thumb=derive_cover_thumb(article.cover_image, article.cover_thumb),
         title=tr.title,
         excerpt=tr.excerpt,
-        text=tr.content,
+        text=clean_article_html(tr.content),
         created_at=article.created_at,
         updated_at=article.updated_at,
     )

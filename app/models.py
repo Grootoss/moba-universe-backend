@@ -62,6 +62,7 @@ class User(Base):
     role: Mapped[str] = mapped_column(String(20), nullable=False, default=UserRole.user.value)
     profile_edit_unlocked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     registration_ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    token_version: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()

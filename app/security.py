@@ -27,26 +27,35 @@ def dummy_password_hash() -> str:
     return _DUMMY_HASH
 
 
-def create_access_token(user_id: int, role: str) -> str:
+def create_access_token(user_id: int, role: str, token_version: int = 0) -> str:
     expire = datetime.now(UTC) + timedelta(minutes=settings.jwt_expire_minutes)
     payload = {
         "sub": str(user_id),
         "role": role,
         "type": "access",
+        "ver": token_version,
         "exp": expire,
     }
     return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
 
 
-def create_refresh_token(user_id: int, role: str) -> str:
+def create_refresh_token(user_id: int, role: str, token_version: int = 0) -> str:
     expire = datetime.now(UTC) + timedelta(days=settings.jwt_refresh_expire_days)
     payload = {
         "sub": str(user_id),
         "role": role,
         "type": "refresh",
+        "ver": token_version,
         "exp": expire,
     }
     return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
+
+
+def token_version_matches(payload: dict, token_version: int) -> bool:
+    try:
+        return int(payload.get("ver", 0)) == token_version
+    except (TypeError, ValueError):
+        return False
 
 
 def decode_token(token: str) -> dict:

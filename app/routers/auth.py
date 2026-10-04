@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from jwt.exceptions import InvalidTokenError
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -20,6 +20,7 @@ from app.security import (
     decode_token,
     dummy_password_hash,
     hash_password,
+    token_version_matches,
     verify_password,
 )
 
@@ -28,8 +29,8 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 def _tokens_for(user: User) -> TokenOut:
     return TokenOut(
-        access_token=create_access_token(user.id, user.role),
-        refresh_token=create_refresh_token(user.id, user.role),
+        access_token=create_access_token(user.id, user.role, user.token_version or 0),
+        refresh_token=create_refresh_token(user.id, user.role, user.token_version or 0),
     )
 
 
@@ -100,9 +101,16 @@ def refresh(body: RefreshIn, db: Session = Depends(get_db)):
         raise HTTPException(status_code=401, detail="Invalid refresh token") from None
 
     user = db.get(User, user_id)
-    if not user:
-        raise HTTPException(status_code=401, detail="User not found")
+    if not user or not token_version_matches(payload, user.token_version or 0):
+        raise HTTPException(status_code=401, detail="Invalid refresh token")
     return _tokens_for(user)
+
+
+@router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
+def logout(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    user.token_version = (user.token_version or 0) + 1
+    db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.get("/me", response_model=UserOut)

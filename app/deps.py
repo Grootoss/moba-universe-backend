@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models import User, UserRole
-from app.security import decode_token
+from app.security import decode_token, token_version_matches
 
 bearer = HTTPBearer(auto_error=False)
 
@@ -27,7 +27,7 @@ def get_current_user(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token") from None
 
     user = db.get(User, user_id)
-    if not user:
+    if not user or not token_version_matches(payload, user.token_version or 0):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
     return user
 
@@ -46,7 +46,10 @@ def get_optional_user(
     except (InvalidTokenError, KeyError, ValueError, TypeError):
         return None
 
-    return db.get(User, user_id)
+    user = db.get(User, user_id)
+    if not user or not token_version_matches(payload, user.token_version or 0):
+        return None
+    return user
 
 
 def require_admin(user: User = Depends(get_current_user)) -> User:

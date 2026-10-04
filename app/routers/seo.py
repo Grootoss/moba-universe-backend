@@ -15,10 +15,11 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from app.article_html import render_article_html
+from app.hub_html import render_guides_html, render_home_html
 from app.config import get_settings
 from app.database import SessionLocal, get_db
 from app.indexnow import INDEXNOW_KEY
-from app.models import Article, ArticleStatus
+from app.models import Article, ArticleStatus, ArticleTranslation
 
 router = APIRouter(tags=["seo"])
 settings = get_settings()
@@ -243,6 +244,43 @@ def feed_xml(db: Session = Depends(get_db)):
 @router.api_route(f"/{INDEXNOW_KEY}.txt", methods=["GET", "HEAD"])
 def indexnow_key_file():
     return Response(content=INDEXNOW_KEY, media_type="text/plain")
+
+
+def _guide_rows(db: Session, lang: str) -> list[tuple[str, str, str]]:
+    rows = db.execute(
+        select(Article.slug, ArticleTranslation.title, ArticleTranslation.excerpt)
+        .join(ArticleTranslation, ArticleTranslation.article_id == Article.id)
+        .where(
+            Article.status == ArticleStatus.published.value,
+            ArticleTranslation.lang == lang,
+        )
+        .order_by(Article.id.desc())
+    ).all()
+    return [(slug, title, excerpt or "") for slug, title, excerpt in rows if slug and title]
+
+
+def _html_page(body: str) -> HTMLResponse:
+    return HTMLResponse(
+        content=body,
+        headers={
+            "X-Robots-Tag": "index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1",
+            "Cache-Control": "public, max-age=300",
+        },
+    )
+
+
+@router.get("/seo/page/{lang}")
+def hub_home(lang: str):
+    if lang not in ("ru", "en"):
+        raise HTTPException(status_code=404, detail="Page not found")
+    return _html_page(render_home_html(lang, _base()))
+
+
+@router.get("/seo/page/{lang}/evergreen")
+def hub_guides(lang: str, db: Session = Depends(get_db)):
+    if lang not in ("ru", "en"):
+        raise HTTPException(status_code=404, detail="Page not found")
+    return _html_page(render_guides_html(lang, _base(), _guide_rows(db, lang)))
 
 
 @router.get("/seo/page/{lang}/evergreen/{slug}")

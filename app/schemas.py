@@ -25,8 +25,8 @@ _USERNAME_RE = re.compile(r"^[A-Za-zА-Яа-яЁё]+$")
 class RegisterIn(BaseModel):
     email: EmailStr
     username: str = Field(min_length=3, max_length=10)
-    password: str = Field(min_length=6, max_length=20)
-    password_confirm: str = Field(min_length=6, max_length=20)
+    password: str = Field(min_length=6, max_length=72)
+    password_confirm: str = Field(min_length=6, max_length=72)
     privacy_consent: bool
 
     @field_validator("username")
@@ -47,8 +47,8 @@ class RegisterIn(BaseModel):
     @field_validator("password")
     @classmethod
     def password_len(cls, v: str) -> str:
-        if len(v) < 6 or len(v) > 20:
-            raise ValueError("password must be 6–20 characters")
+        if len(v) < 6 or len(v) > 72:
+            raise ValueError("password must be 6–72 characters")
         return v
 
     @model_validator(mode="after")
@@ -74,7 +74,8 @@ from app.game_options import GAME_SLUGS, RANKS, ROLE_SLUGS
 
 _SOCIAL_LABEL_RE = re.compile(r"^[A-Za-zА-Яа-яЁё0-9 ._-]{1,40}$")
 _SAFE_URL_RE = re.compile(r"^https?://", re.IGNORECASE)
-_MAX_CONTACTS = 1
+_MAX_CONTACTS = 2
+_CONTACT_LABELS = {"telegram": "Telegram", "discord": "Discord"}
 _MAX_ROLES = 5
 
 
@@ -215,7 +216,7 @@ class ProfileGamesUpdateIn(BaseModel):
 
 
 class ProfileContactsUpdateIn(BaseModel):
-    """Telegram link — saved immediately. Shown on the public profile only if marked public."""
+    """Telegram and Discord. A link is public only when marked public."""
 
     contacts: list[SocialLinkIn] = Field(default_factory=list)
 
@@ -223,8 +224,18 @@ class ProfileContactsUpdateIn(BaseModel):
     @classmethod
     def contacts_ok(cls, v: list[SocialLinkIn]) -> list[SocialLinkIn]:
         if len(v) > _MAX_CONTACTS:
-            raise ValueError("at most 1 contact link")
-        return v
+            raise ValueError("at most 2 contact links")
+        seen: set[str] = set()
+        normalized: list[SocialLinkIn] = []
+        for item in v:
+            key = item.label.strip().lower()
+            if key not in _CONTACT_LABELS:
+                raise ValueError("only Telegram and Discord are allowed")
+            if key in seen:
+                raise ValueError("duplicate contact")
+            seen.add(key)
+            normalized.append(item.model_copy(update={"label": _CONTACT_LABELS[key]}))
+        return normalized
 
 
 class ContactUserOut(BaseModel):

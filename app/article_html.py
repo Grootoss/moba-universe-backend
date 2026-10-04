@@ -6,6 +6,7 @@ import json
 from datetime import datetime
 from html import escape
 
+from app.html_clean import clean_article_html
 from app.models import Article, ArticleTranslation
 
 _ROBOTS = "index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1"
@@ -68,7 +69,7 @@ def render_article_html(article: Article, lang: str, site_url: str) -> str | Non
     }
     json_ld = json.dumps(graph, ensure_ascii=False).replace("<", "\\u003c")
     extra = ""
-    example = (tr.mlbb_example or "").strip()
+    example = clean_article_html(tr.mlbb_example).strip()
     if example:
         heading = "Пример" if lang == "ru" else "Example"
         extra = f"<section><h2>{heading}</h2>{example}</section>"
@@ -120,7 +121,7 @@ def render_article_html(article: Article, lang: str, site_url: str) -> str | Non
     <article>
       <h1>{escape(title)}</h1>
       {dates}
-      {tr.content}
+      {clean_article_html(tr.content)}
       {extra}
     </article>
     <p class="lang"><a href="{escape(other_href)}">{other_label}</a></p>

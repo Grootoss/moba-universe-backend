@@ -408,6 +408,38 @@ def test_contact_request_flow(client, db_session, regular_user):
     urls = {c["url"] for c in outgoing[0]["contacts"]}
     assert "https://t.me/secret" in urls
 
+    shared = client.get(f"/api/users/{other.id}", headers=headers)
+    assert shared.status_code == 200
+    assert shared.json()["contact_status"] == "accepted"
+    shared_urls = {c["url"] for c in shared.json()["contacts"]}
+    assert "https://t.me/secret" in shared_urls
+
+
+def test_save_only_telegram_and_discord(client, regular_user):
+    from tests.conftest import auth_header
+
+    headers = auth_header(client, regular_user.email, "player1")
+    saved = client.put(
+        "/api/me/profile/contacts",
+        headers=headers,
+        json={
+            "contacts": [
+                {"label": "telegram", "url": "https://t.me/player", "is_public": False},
+                {"label": "Discord", "url": "https://discord.gg/abc", "is_public": True},
+            ]
+        },
+    )
+    assert saved.status_code == 200, saved.text
+    labels = {c["label"]: c["is_public"] for c in saved.json()["contacts"]}
+    assert labels == {"Telegram": False, "Discord": True}
+
+    rejected = client.put(
+        "/api/me/profile/contacts",
+        headers=headers,
+        json={"contacts": [{"label": "Steam", "url": "https://steamcommunity.com/id/x", "is_public": True}]},
+    )
+    assert rejected.status_code == 422
+
 
 def test_register_one_account_per_ip_per_day(client):
     first = {
@@ -462,6 +494,69 @@ def test_login_locks_after_repeated_failures(client, regular_user):
     )
     assert locked.status_code == 429
     assert "too many login attempts" in locked.json()["detail"].lower()
+
+
+def test_logout_revokes_tokens(client, regular_user):
+    login = client.post(
+        "/api/auth/login",
+        json={"email": regular_user.email, "password": "player1"},
+    )
+    assert login.status_code == 200
+    access = login.json()["access_token"]
+    refresh = login.json()["refresh_token"]
+    headers = {"Authorization": f"Bearer {access}"}
+
+    out = client.post("/api/auth/logout", headers=headers)
+    assert out.status_code == 204
+    assert client.get("/api/auth/me", headers=headers).status_code == 401
+    again = client.post("/api/auth/refresh", json={"refresh_token": refresh})
+    assert again.status_code == 401
+
+
+def test_register_accepts_password_past_20(client):
+    password = "s" * 40
+    res = client.post(
+        "/api/auth/register",
+        json={
+            "email": "longpass@example.com",
+            "username": "LongPass",
+            "password": password,
+            "password_confirm": password,
+            "privacy_consent": True,
+        },
+    )
+    assert res.status_code == 201, res.text
+    login = client.post(
+        "/api/auth/login",
+        json={"email": "longpass@example.com", "password": password},
+    )
+    assert login.status_code == 200
+
+
+def test_hub_html_and_clean_article(client, published_article, db_session):
+    ru = next(tr for tr in published_article.translations if tr.lang == "ru")
+    ru.content = "<p>ok</p><script>alert(1)</script>"
+    db_session.commit()
+
+    home = client.get("/seo/page/ru")
+    assert home.status_code == 200
+    assert "Фан-сайт по MOBA-играм" in home.text
+    assert "/ru/evergreen" in home.text
+
+    guides = client.get("/seo/page/ru/evergreen")
+    assert guides.status_code == 200
+    assert "mythic-guide" in guides.text
+    assert "Как апнуть миф" in guides.text
+
+    page = client.get("/seo/page/ru/evergreen/mythic-guide")
+    assert page.status_code == 200
+    assert "alert(1)" not in page.text
+    assert "ok" in page.text
+
+    public = client.get("/api/evergreen/articles/mythic-guide")
+    body = public.json()["translations"]["ru"]["text"].lower()
+    assert "alert(1)" not in body
+    assert "<script" not in body
 
 
 def test_profile_options_include_roles(client):
