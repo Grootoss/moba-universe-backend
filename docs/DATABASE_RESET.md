@@ -7,7 +7,7 @@
 | Сущность | Значение |
 |----------|----------|
 | Admin | `admin@mobauniverse.com` / пароль из `ADMIN_PASSWORD` в `.env` |
-| Rootoss | `rootoss@mobauniverse.com` / `player123` |
+| Rootoss | `rootoss@mobauniverse.com` / пароль из `ROOTOSS_PASSWORD` в окружении. Без этой переменной демо-профиль не создаётся. |
 | Статьи | нет (пусто) |
 | Категории | ranks, replays, roles, heroes, macro, mental, draft, beginners |
 
@@ -45,7 +45,7 @@ python scripts/reset_db.py
    psql -U moba -d postgres -c "DROP DATABASE IF EXISTS mobauniverse;"
    psql -U moba -d postgres -c "CREATE DATABASE mobauniverse OWNER moba;"
    ```
-5. Убедитесь, что в `.env` заданы `DATABASE_URL` и `ADMIN_PASSWORD`.
+5. Убедитесь, что в `.env` заданы `DATABASE_URL`, `JWT_SECRET`, `ADMIN_PASSWORD`. Для демо-профиля Rootoss дополнительно задайте `ROOTOSS_PASSWORD` (не храните его в репозитории).
 6. Запустите reset **внутри контейнера** или на хосте с тем же `DATABASE_URL`:
    ```bash
    docker compose run --rm backend python scripts/reset_db.py

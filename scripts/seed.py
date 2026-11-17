@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -30,7 +31,6 @@ ADMIN_USERNAME = "admin"
 ROOTOSS = {
     "email": "rootoss@mobauniverse.com",
     "username": "rootoss",
-    "password": "player123",
     "nickname": "Rootoss",
     "bio": (
         "Привет! Я играю в MOBA уже несколько сезонов и люблю разбирать реплеи.\n\n"
@@ -44,7 +44,7 @@ ROOTOSS = {
 }
 
 
-def _upsert_profile(db, demo: dict) -> User:
+def _upsert_profile(db, demo: dict) -> User | None:
     # Migrate old seed email player1 → rootoss
     legacy = db.scalar(select(User).where(User.email == "player1@mobauniverse.com"))
     if legacy and demo["email"] != "player1@mobauniverse.com":
@@ -56,10 +56,17 @@ def _upsert_profile(db, demo: dict) -> User:
 
     user = db.scalar(select(User).where(User.email == demo["email"]))
     if not user:
+        password = (demo.get("password") or "").strip()
+        if not password:
+            print(
+                "Skip demo profile: set ROOTOSS_PASSWORD to create "
+                f"{demo['email']}. Refusing to seed a built-in password."
+            )
+            return None
         user = User(
             email=demo["email"],
             username=demo["username"],
-            password_hash=hash_password(demo["password"]),
+            password_hash=hash_password(password),
             role=UserRole.user.value,
             profile_edit_unlocked=True,
         )
@@ -110,8 +117,10 @@ def _upsert_profile(db, demo: dict) -> User:
 def seed() -> None:
     db = SessionLocal()
     try:
-        # /user/1 — Rootoss (create first on empty DB)
-        _upsert_profile(db, ROOTOSS)
+        # /user/1 — Rootoss (create first on empty DB). Password only from the environment.
+        demo = dict(ROOTOSS)
+        demo["password"] = os.environ.get("ROOTOSS_PASSWORD", "").strip()
+        _upsert_profile(db, demo)
 
         # Remove old demo /user/2 if present
         player2 = db.scalar(select(User).where(User.email == "player2@mobauniverse.com"))
