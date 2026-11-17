@@ -19,7 +19,7 @@ from app.hub_html import render_guides_html, render_home_html
 from app.config import get_settings
 from app.database import SessionLocal, get_db
 from app.indexnow import INDEXNOW_KEY
-from app.models import Article, ArticleStatus, ArticleTranslation
+from app.models import Article, ArticleStatus, ArticleTranslation, Quiz
 
 router = APIRouter(tags=["seo"])
 settings = get_settings()
@@ -144,6 +144,22 @@ def _load_entries(db) -> list[tuple[str, str, str, str | None]]:
             entries.append((f"{base}/en/evergreen/{slug}", f"{base}/ru/evergreen/{slug}", "en", stamp))
     except Exception:
         logger.exception("sitemap: failed to load articles")
+        _safe_rollback(db)
+
+    try:
+        quizzes = db.execute(
+            select(Quiz.slug, Quiz.updated_at, Quiz.created_at)
+            .where(Quiz.status == ArticleStatus.published.value)
+            .order_by(Quiz.id)
+        ).all()
+        for slug, updated_at, created_at in quizzes:
+            if not slug:
+                continue
+            stamp = _lastmod(updated_at) or _lastmod(created_at)
+            entries.append((f"{base}/ru/tests/{slug}", f"{base}/en/tests/{slug}", "ru", stamp))
+            entries.append((f"{base}/en/tests/{slug}", f"{base}/ru/tests/{slug}", "en", stamp))
+    except Exception:
+        logger.exception("sitemap: failed to load quizzes")
         _safe_rollback(db)
 
     return entries

@@ -201,3 +201,128 @@ class ArticleTranslation(Base):
     mlbb_example: Mapped[str] = mapped_column(Text, nullable=False, default="")
 
     article: Mapped[Article] = relationship(back_populates="translations")
+
+
+class Quiz(Base):
+    __tablename__ = "quizzes"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    slug: Mapped[str] = mapped_column(String(160), unique=True, nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default=ArticleStatus.draft.value)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    translations: Mapped[list["QuizTranslation"]] = relationship(
+        back_populates="quiz", cascade="all, delete-orphan"
+    )
+    questions: Mapped[list["QuizQuestion"]] = relationship(
+        back_populates="quiz",
+        cascade="all, delete-orphan",
+        order_by="QuizQuestion.sort_order",
+    )
+    results: Mapped[list["QuizResult"]] = relationship(
+        back_populates="quiz",
+        cascade="all, delete-orphan",
+        order_by="QuizResult.sort_order",
+    )
+
+
+class QuizTranslation(Base):
+    __tablename__ = "quiz_translations"
+    __table_args__ = (UniqueConstraint("quiz_id", "lang", name="uq_quiz_lang"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    quiz_id: Mapped[int] = mapped_column(ForeignKey("quizzes.id", ondelete="CASCADE"))
+    lang: Mapped[str] = mapped_column(String(5), nullable=False)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[str] = mapped_column(String(1000), nullable=False, default="")
+
+    quiz: Mapped[Quiz] = relationship(back_populates="translations")
+
+
+class QuizQuestion(Base):
+    __tablename__ = "quiz_questions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    quiz_id: Mapped[int] = mapped_column(ForeignKey("quizzes.id", ondelete="CASCADE"), index=True)
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    image: Mapped[str | None] = mapped_column(String(512), nullable=True)
+
+    quiz: Mapped[Quiz] = relationship(back_populates="questions")
+    translations: Mapped[list["QuizQuestionTranslation"]] = relationship(
+        back_populates="question", cascade="all, delete-orphan"
+    )
+    options: Mapped[list["QuizOption"]] = relationship(
+        back_populates="question",
+        cascade="all, delete-orphan",
+        order_by="QuizOption.sort_order",
+    )
+
+
+class QuizQuestionTranslation(Base):
+    __tablename__ = "quiz_question_translations"
+    __table_args__ = (UniqueConstraint("question_id", "lang", name="uq_quiz_question_lang"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    question_id: Mapped[int] = mapped_column(ForeignKey("quiz_questions.id", ondelete="CASCADE"))
+    lang: Mapped[str] = mapped_column(String(5), nullable=False)
+    prompt: Mapped[str] = mapped_column(Text, nullable=False)
+    explanation: Mapped[str] = mapped_column(Text, nullable=False, default="")
+
+    question: Mapped[QuizQuestion] = relationship(back_populates="translations")
+
+
+class QuizOption(Base):
+    __tablename__ = "quiz_options"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    question_id: Mapped[int] = mapped_column(ForeignKey("quiz_questions.id", ondelete="CASCADE"), index=True)
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    is_correct: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+    question: Mapped[QuizQuestion] = relationship(back_populates="options")
+    translations: Mapped[list["QuizOptionTranslation"]] = relationship(
+        back_populates="option", cascade="all, delete-orphan"
+    )
+
+
+class QuizOptionTranslation(Base):
+    __tablename__ = "quiz_option_translations"
+    __table_args__ = (UniqueConstraint("option_id", "lang", name="uq_quiz_option_lang"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    option_id: Mapped[int] = mapped_column(ForeignKey("quiz_options.id", ondelete="CASCADE"))
+    lang: Mapped[str] = mapped_column(String(5), nullable=False)
+    text: Mapped[str] = mapped_column(String(500), nullable=False)
+
+    option: Mapped[QuizOption] = relationship(back_populates="translations")
+
+
+class QuizResult(Base):
+    __tablename__ = "quiz_results"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    quiz_id: Mapped[int] = mapped_column(ForeignKey("quizzes.id", ondelete="CASCADE"), index=True)
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    min_correct: Mapped[int] = mapped_column(Integer, nullable=False)
+    max_correct: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    quiz: Mapped[Quiz] = relationship(back_populates="results")
+    translations: Mapped[list["QuizResultTranslation"]] = relationship(
+        back_populates="result", cascade="all, delete-orphan"
+    )
+
+
+class QuizResultTranslation(Base):
+    __tablename__ = "quiz_result_translations"
+    __table_args__ = (UniqueConstraint("result_id", "lang", name="uq_quiz_result_lang"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    result_id: Mapped[int] = mapped_column(ForeignKey("quiz_results.id", ondelete="CASCADE"))
+    lang: Mapped[str] = mapped_column(String(5), nullable=False)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    body: Mapped[str] = mapped_column(Text, nullable=False, default="")
+
+    result: Mapped[QuizResult] = relationship(back_populates="translations")

@@ -1,5 +1,5 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import func, select
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from sqlalchemy import and_, func, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.database import get_db
@@ -70,6 +70,7 @@ def _article_card(article: Article, lang: str) -> ArticleCardOut:
 
 @router.get("")
 def list_articles(
+    response: Response,
     lang: str = Query("ru", description="ru or en — list returns that language only"),
     q: str | None = Query(None, description="Search in article titles"),
     category: str | None = Query(None, description="Filter by category slug"),
@@ -81,6 +82,7 @@ def list_articles(
     ),
     db: Session = Depends(get_db),
 ):
+    response.headers["Cache-Control"] = "public, max-age=60"
     filters = [Article.status == ArticleStatus.published.value]
     search = (q or "").strip()
     if search:
@@ -89,17 +91,47 @@ def list_articles(
     if category_slug:
         filters.append(Article.category.has(Category.slug == category_slug))
 
+    active_lang = lang if lang in ("ru", "en") else "ru"
     total = db.scalar(select(func.count()).select_from(Article).where(*filters)) or 0
-    rows = db.scalars(
-        select(Article)
+    rows = db.execute(
+        select(
+            Article.id.label("id"),
+            Article.slug.label("slug"),
+            Article.cover_image.label("cover_image"),
+            Article.cover_thumb.label("cover_thumb"),
+            Article.created_at.label("created_at"),
+            Article.updated_at.label("updated_at"),
+            Category.slug.label("category_slug"),
+            ArticleTranslation.title.label("title"),
+            ArticleTranslation.excerpt.label("excerpt"),
+        )
+        .outerjoin(
+            ArticleTranslation,
+            and_(
+                ArticleTranslation.article_id == Article.id,
+                ArticleTranslation.lang == active_lang,
+            ),
+        )
+        .outerjoin(Category, Category.id == Article.category_id)
         .where(*filters)
-        .options(selectinload(Article.translations), selectinload(Article.category))
         .order_by(Article.id.desc())
         .offset((page - 1) * page_size)
         .limit(page_size)
     ).all()
-    active_lang = lang if lang in ("ru", "en") else "ru"
-    items = [_article_card(a, active_lang) for a in rows]
+    items = [
+        ArticleCardOut(
+            id_article=row.id,
+            slug=row.slug,
+            category=row.category_slug,
+            cover_image=row.cover_image,
+            cover_thumb=derive_cover_thumb(row.cover_image, row.cover_thumb),
+            title=row.title or row.slug,
+            excerpt=row.excerpt or "",
+            created_at=row.created_at,
+            updated_at=row.updated_at,
+        )
+        for row in rows
+    ]
     if paginated:
         return ArticleListOut(items=items, total=total, page=page, page_size=page_size)
     return items

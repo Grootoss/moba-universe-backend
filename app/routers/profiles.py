@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session, selectinload
 
@@ -255,7 +255,8 @@ def cancel_my_profile(user: User = Depends(get_current_user), db: Session = Depe
 
 
 @router.get("/users", response_model=list[PublicProfileOut])
-def list_public_profiles(db: Session = Depends(get_db)):
+def list_public_profiles(response: Response, db: Session = Depends(get_db)):
+    response.headers["Cache-Control"] = "public, max-age=30"
     filters = [
         UserProfile.moderation_status == ModerationStatus.approved.value,
         UserProfile.is_public.is_(True),

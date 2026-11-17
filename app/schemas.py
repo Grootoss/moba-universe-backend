@@ -420,3 +420,240 @@ class GameOptionsOut(BaseModel):
 
 class ErrorOut(BaseModel):
     detail: str
+
+
+_QUIZ_SLUG_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+_QUIZ_LANGS = ("ru", "en")
+QUIZ_MAX_QUESTIONS = 20
+QUIZ_MAX_OPTIONS = 20
+QUIZ_MAX_RESULTS = 12
+
+
+def _quiz_image(value: str | None) -> str | None:
+    if value is None:
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    if len(text) > 512:
+        raise ValueError("image URL is too long")
+    if not (text.startswith("/") or text.startswith("http://") or text.startswith("https://")):
+        raise ValueError("image must be a site path or http(s) URL")
+    return text
+
+
+class QuizCopyIn(BaseModel):
+    title: str = Field(min_length=1, max_length=255)
+    description: str = Field(default="", max_length=1000)
+
+
+class QuizOptionTextIn(BaseModel):
+    text: str = Field(min_length=1, max_length=500)
+
+
+class QuizOptionIn(BaseModel):
+    is_correct: bool = False
+    translations: dict[str, QuizOptionTextIn]
+
+
+class QuizQuestionTextIn(BaseModel):
+    prompt: str = Field(min_length=1, max_length=4000)
+    explanation: str = Field(default="", max_length=4000)
+
+
+class QuizQuestionIn(BaseModel):
+    image: str | None = None
+    translations: dict[str, QuizQuestionTextIn]
+    options: list[QuizOptionIn] = Field(default_factory=list)
+
+    @field_validator("image")
+    @classmethod
+    def image_ok(cls, value: str | None) -> str | None:
+        return _quiz_image(value)
+
+
+class QuizResultTextIn(BaseModel):
+    title: str = Field(min_length=1, max_length=255)
+    body: str = Field(default="", max_length=4000)
+
+
+class QuizResultIn(BaseModel):
+    min_correct: int = Field(ge=0, le=QUIZ_MAX_QUESTIONS)
+    max_correct: int = Field(ge=0, le=QUIZ_MAX_QUESTIONS)
+    translations: dict[str, QuizResultTextIn]
+
+
+class QuizWriteIn(BaseModel):
+    slug: str = Field(min_length=1, max_length=160)
+    status: str
+    translations: dict[str, QuizCopyIn]
+    questions: list[QuizQuestionIn] = Field(default_factory=list, max_length=QUIZ_MAX_QUESTIONS)
+    results: list[QuizResultIn] = Field(default_factory=list, max_length=QUIZ_MAX_RESULTS)
+
+    @field_validator("slug")
+    @classmethod
+    def slug_ok(cls, value: str) -> str:
+        slug = value.strip().lower()
+        if not _QUIZ_SLUG_RE.fullmatch(slug):
+            raise ValueError("slug must use lowercase letters, numbers, and hyphens")
+        return slug
+
+    @field_validator("status")
+    @classmethod
+    def status_ok(cls, value: str) -> str:
+        if value not in {"draft", "published"}:
+            raise ValueError("status must be draft or published")
+        return value
+
+    @model_validator(mode="after")
+    def structure_ok(self) -> "QuizWriteIn":
+        for lang in _QUIZ_LANGS:
+            if lang not in self.translations:
+                raise ValueError("ru and en translations are required")
+        published = self.status == "published"
+        if published and not self.questions:
+            raise ValueError("a published test needs at least one question")
+        if len(self.questions) > QUIZ_MAX_QUESTIONS:
+            raise ValueError("a test can have at most 20 questions")
+        for question in self.questions:
+            for lang in _QUIZ_LANGS:
+                if lang not in question.translations:
+                    raise ValueError("each question needs ru and en text")
+                if published and not question.translations[lang].explanation.strip():
+                    raise ValueError("published questions need an explanation in both languages")
+            if len(question.options) < 2:
+                raise ValueError("each question needs at least two answers")
+            if len(question.options) > QUIZ_MAX_OPTIONS:
+                raise ValueError("each question can have at most 20 answers")
+            if not any(option.is_correct for option in question.options):
+                raise ValueError("each question needs a correct answer")
+            for option in question.options:
+                for lang in _QUIZ_LANGS:
+                    if lang not in option.translations:
+                        raise ValueError("each answer needs ru and en text")
+        total = len(self.questions)
+        for band in self.results:
+            if band.min_correct > band.max_correct:
+                raise ValueError("result range is reversed")
+            if total and band.max_correct > total:
+                raise ValueError("result range is outside the question count")
+            for lang in _QUIZ_LANGS:
+                if lang not in band.translations:
+                    raise ValueError("each result needs ru and en text")
+        return self
+
+
+class QuizAdminOptionOut(BaseModel):
+    is_correct: bool
+    translations: dict[str, QuizOptionTextIn]
+
+
+class QuizAdminQuestionOut(BaseModel):
+    image: str | None = None
+    translations: dict[str, QuizQuestionTextIn]
+    options: list[QuizAdminOptionOut]
+
+
+class QuizAdminResultOut(BaseModel):
+    min_correct: int
+    max_correct: int
+    translations: dict[str, QuizResultTextIn]
+
+
+class QuizAdminOut(BaseModel):
+    id: int
+    slug: str
+    status: str
+    question_count: int
+    translations: dict[str, QuizCopyIn]
+    questions: list[QuizAdminQuestionOut]
+    results: list[QuizAdminResultOut]
+
+
+class QuizAdminCardOut(BaseModel):
+    id: int
+    slug: str
+    status: str
+    title_ru: str
+    title_en: str
+    question_count: int
+
+
+class QuizCardOut(BaseModel):
+    slug: str
+    title: str
+    description: str = ""
+    question_count: int
+
+
+class QuizOptionPublicOut(BaseModel):
+    id: int
+    text: str
+
+
+class QuizQuestionPublicOut(BaseModel):
+    id: int
+    image: str | None = None
+    prompt: str
+    multiple: bool
+    options: list[QuizOptionPublicOut]
+
+
+class QuizPreviewOut(BaseModel):
+    slug: str
+    title: str
+    description: str = ""
+    question_count: int
+
+
+class QuizPublicOut(BaseModel):
+    slug: str
+    title: str
+    description: str = ""
+    questions: list[QuizQuestionPublicOut]
+
+
+class QuizAnswerIn(BaseModel):
+    question_id: int
+    option_ids: list[int] = Field(default_factory=list)
+
+
+class QuizSubmitIn(BaseModel):
+    lang: str = "ru"
+    answers: list[QuizAnswerIn] = Field(default_factory=list)
+
+    @field_validator("lang")
+    @classmethod
+    def lang_ok(cls, value: str) -> str:
+        lang = value.strip().lower()
+        if lang not in _QUIZ_LANGS:
+            raise ValueError("lang must be ru or en")
+        return lang
+
+
+class QuizOptionReviewOut(BaseModel):
+    id: int
+    text: str
+    is_correct: bool
+    selected: bool
+
+
+class QuizQuestionReviewOut(BaseModel):
+    id: int
+    image: str | None = None
+    prompt: str
+    explanation: str
+    correct: bool
+    options: list[QuizOptionReviewOut]
+
+
+class QuizScoreTextOut(BaseModel):
+    title: str
+    body: str = ""
+
+
+class QuizSubmitOut(BaseModel):
+    score: int
+    total: int
+    result: QuizScoreTextOut | None = None
+    questions: list[QuizQuestionReviewOut]

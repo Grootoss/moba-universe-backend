@@ -4,7 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
-from app.routers import admin, articles, auth, categories, profiles, seo
+from app.routers import admin, articles, auth, categories, profiles, quizzes, seo
 
 settings = get_settings()
 _expose_docs = os.getenv("EXPOSE_API_DOCS", "").lower() in {"1", "true", "yes"}
@@ -29,6 +29,8 @@ app.include_router(articles.router)
 app.include_router(categories.router)
 app.include_router(profiles.router)
 app.include_router(admin.router)
+app.include_router(quizzes.public_router)
+app.include_router(quizzes.admin_router)
 app.include_router(seo.router)
 
 
