@@ -6,6 +6,7 @@ from sqlalchemy import (
     Date,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
@@ -208,11 +209,16 @@ class Quiz(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     slug: Mapped[str] = mapped_column(String(160), unique=True, nullable=False, index=True)
+    game: Mapped[str] = mapped_column(String(32), nullable=False, default="mlbb", server_default="mlbb")
+    role: Mapped[str] = mapped_column(String(32), nullable=False, default="", server_default="")
+    cover_image: Mapped[str | None] = mapped_column(String(512), nullable=True)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default=ArticleStatus.draft.value)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
+
+    __table_args__ = (Index("ix_quizzes_game_role", "game", "role"),)
 
     translations: Mapped[list["QuizTranslation"]] = relationship(
         back_populates="quiz", cascade="all, delete-orphan"

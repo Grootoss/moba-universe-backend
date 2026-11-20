@@ -1,5 +1,5 @@
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.category_helpers import list_all_categories
@@ -19,7 +19,9 @@ from app.models import (
 )
 from app.schemas import (
     AdminProfileOut,
+    AdminProfilePageOut,
     ArticleAdminOut,
+    ArticleAdminPageOut,
     ArticleCreateIn,
     ArticleUpdateIn,
     CategoryOut,
@@ -77,14 +79,27 @@ def _profile_admin(profile: UserProfile) -> AdminProfileOut:
     )
 
 
-@router.get("/profiles", response_model=list[AdminProfileOut])
-def admin_list_profiles(_: User = Depends(require_moderator), db: Session = Depends(get_db)):
+@router.get("/profiles", response_model=AdminProfilePageOut)
+def admin_list_profiles(
+    _: User = Depends(require_moderator),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    db: Session = Depends(get_db),
+):
+    total = db.scalar(select(func.count()).select_from(UserProfile)) or 0
     rows = db.scalars(
         select(UserProfile)
         .options(selectinload(UserProfile.game_ranks), selectinload(UserProfile.user))
         .order_by(UserProfile.user_id)
+        .offset((page - 1) * page_size)
+        .limit(page_size)
     ).all()
-    return [_profile_admin(p) for p in rows]
+    return AdminProfilePageOut(
+        items=[_profile_admin(p) for p in rows],
+        total=total,
+        page=page,
+        page_size=page_size,
+    )
 
 
 @router.post("/profiles/{user_id}/unlock", response_model=AdminProfileOut)
@@ -188,14 +203,35 @@ def admin_list_categories(_: User = Depends(require_admin), db: Session = Depend
     return [CategoryOut(slug=c.slug, name_ru=c.name_ru, name_en=c.name_en) for c in rows]
 
 
-@router.get("/articles", response_model=list[ArticleAdminOut])
-def admin_list_articles(_: User = Depends(require_admin), db: Session = Depends(get_db)):
+@router.get("/articles", response_model=ArticleAdminPageOut)
+def admin_list_articles(
+    _: User = Depends(require_admin),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    status: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+):
+    filters = []
+    if status in {item.value for item in ArticleStatus}:
+        filters.append(Article.status == status)
+    count_stmt = select(func.count()).select_from(Article)
+    list_stmt = select(Article)
+    if filters:
+        count_stmt = count_stmt.where(*filters)
+        list_stmt = list_stmt.where(*filters)
+    total = db.scalar(count_stmt) or 0
     rows = db.scalars(
-        select(Article)
-        .options(selectinload(Article.translations), selectinload(Article.category))
+        list_stmt.options(selectinload(Article.translations), selectinload(Article.category))
         .order_by(Article.id)
+        .offset((page - 1) * page_size)
+        .limit(page_size)
     ).all()
-    return [_article_admin(a) for a in rows]
+    return ArticleAdminPageOut(
+        items=[_article_admin(a) for a in rows],
+        total=total,
+        page=page,
+        page_size=page_size,
+    )
 
 
 @router.get("/articles/{article_id}", response_model=ArticleAdminOut)

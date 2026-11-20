@@ -148,16 +148,19 @@ def _load_entries(db) -> list[tuple[str, str, str, str | None]]:
 
     try:
         quizzes = db.execute(
-            select(Quiz.slug, Quiz.updated_at, Quiz.created_at)
+            select(Quiz.slug, Quiz.game, Quiz.updated_at, Quiz.created_at)
             .where(Quiz.status == ArticleStatus.published.value)
             .order_by(Quiz.id)
         ).all()
-        for slug, updated_at, created_at in quizzes:
+        for slug, game, updated_at, created_at in quizzes:
             if not slug:
                 continue
             stamp = _lastmod(updated_at) or _lastmod(created_at)
-            entries.append((f"{base}/ru/tests/{slug}", f"{base}/en/tests/{slug}", "ru", stamp))
-            entries.append((f"{base}/en/tests/{slug}", f"{base}/ru/tests/{slug}", "en", stamp))
+            folder = game or "mlbb"
+            ru = f"{base}/ru/tests/{folder}/{slug}"
+            en = f"{base}/en/tests/{folder}/{slug}"
+            entries.append((ru, en, "ru", stamp))
+            entries.append((en, ru, "en", stamp))
     except Exception:
         logger.exception("sitemap: failed to load quizzes")
         _safe_rollback(db)

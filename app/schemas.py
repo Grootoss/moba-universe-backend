@@ -261,6 +261,13 @@ class AdminProfileOut(PublicProfileOut):
     profile_edit_unlocked: bool = False
 
 
+class AdminProfilePageOut(BaseModel):
+    items: list[AdminProfileOut]
+    total: int
+    page: int
+    page_size: int
+
+
 class ProfileModerateIn(BaseModel):
     moderation_status: str
     is_public: bool | None = None
@@ -362,6 +369,13 @@ class ArticleAdminOut(BaseModel):
     content_en: str | None = None
     mlbb_example_ru: str | None = None
     mlbb_example_en: str | None = None
+
+
+class ArticleAdminPageOut(BaseModel):
+    items: list[ArticleAdminOut]
+    total: int
+    page: int
+    page_size: int
 
 
 class ArticleListItemOut(BaseModel):
@@ -486,6 +500,9 @@ class QuizResultIn(BaseModel):
 class QuizWriteIn(BaseModel):
     slug: str = Field(min_length=1, max_length=160)
     status: str
+    game: str | None = None
+    role: str | None = None
+    cover_image: str | None = None
     translations: dict[str, QuizCopyIn]
     questions: list[QuizQuestionIn] = Field(default_factory=list, max_length=QUIZ_MAX_QUESTIONS)
     results: list[QuizResultIn] = Field(default_factory=list, max_length=QUIZ_MAX_RESULTS)
@@ -564,6 +581,9 @@ class QuizAdminOut(BaseModel):
     id: int
     slug: str
     status: str
+    game: str = "mlbb"
+    role: str = ""
+    cover_image: str | None = None
     question_count: int
     translations: dict[str, QuizCopyIn]
     questions: list[QuizAdminQuestionOut]
@@ -574,13 +594,25 @@ class QuizAdminCardOut(BaseModel):
     id: int
     slug: str
     status: str
+    game: str = "mlbb"
+    role: str = ""
     title_ru: str
     title_en: str
     question_count: int
 
 
+class QuizAdminPageOut(BaseModel):
+    items: list[QuizAdminCardOut]
+    total: int
+    page: int
+    page_size: int
+
+
 class QuizCardOut(BaseModel):
     slug: str
+    game: str = "mlbb"
+    role: str = ""
+    cover_image: str | None = None
     title: str
     description: str = ""
     question_count: int
@@ -601,6 +633,9 @@ class QuizQuestionPublicOut(BaseModel):
 
 class QuizPreviewOut(BaseModel):
     slug: str
+    game: str = "mlbb"
+    role: str = ""
+    cover_image: str | None = None
     title: str
     description: str = ""
     question_count: int
@@ -608,6 +643,8 @@ class QuizPreviewOut(BaseModel):
 
 class QuizPublicOut(BaseModel):
     slug: str
+    game: str = "mlbb"
+    role: str = ""
     title: str
     description: str = ""
     questions: list[QuizQuestionPublicOut]

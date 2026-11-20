@@ -52,22 +52,6 @@ def _article_flat(article: Article, lang: str) -> ArticleListItemOut:
     )
 
 
-def _article_card(article: Article, lang: str) -> ArticleCardOut:
-    by_lang = {tr.lang: tr for tr in article.translations}
-    tr = by_lang.get(lang) or by_lang.get("en") or by_lang.get("ru")
-    return ArticleCardOut(
-        id_article=article.id,
-        slug=article.slug,
-        category=article.category.slug if article.category else None,
-        cover_image=article.cover_image,
-        cover_thumb=derive_cover_thumb(article.cover_image, article.cover_thumb),
-        title=tr.title if tr else article.slug,
-        excerpt=(tr.excerpt if tr else "") or "",
-        created_at=article.created_at,
-        updated_at=article.updated_at,
-    )
-
-
 @router.get("")
 def list_articles(
     response: Response,

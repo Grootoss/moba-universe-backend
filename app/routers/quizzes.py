@@ -21,6 +21,7 @@ from app.schemas import (
     QuizAdminCardOut,
     QuizAdminOptionOut,
     QuizAdminOut,
+    QuizAdminPageOut,
     QuizAdminQuestionOut,
     QuizAdminResultOut,
     QuizCardOut,
@@ -83,9 +84,32 @@ def _published(db: Session, slug: str) -> Quiz:
     return quiz
 
 
+def _role_from_slug(slug: str) -> str:
+    for role in ("roam", "mid", "jungle", "exp", "gold"):
+        if slug == role or slug.startswith(f"{role}-"):
+            return role
+    return ""
+
+
+def _apply_place(quiz: Quiz, data: QuizWriteIn) -> None:
+    if data.game:
+        quiz.game = data.game.strip() or "mlbb"
+    elif not quiz.game:
+        quiz.game = "mlbb"
+    if data.role:
+        quiz.role = data.role.strip()
+    elif not quiz.role:
+        quiz.role = _role_from_slug(quiz.slug)
+    if data.cover_image:
+        quiz.cover_image = data.cover_image
+    elif not quiz.cover_image and quiz.role:
+        quiz.cover_image = f"/images/quiz/{quiz.role}-1.svg"
+
+
 def _replace(quiz: Quiz, data: QuizWriteIn, db: Session) -> None:
     quiz.slug = data.slug
     quiz.status = data.status
+    _apply_place(quiz, data)
     quiz.translations.clear()
     quiz.questions.clear()
     quiz.results.clear()
@@ -137,6 +161,9 @@ def _admin_out(quiz: Quiz) -> QuizAdminOut:
         id=quiz.id,
         slug=quiz.slug,
         status=quiz.status,
+        game=quiz.game or "mlbb",
+        role=quiz.role or "",
+        cover_image=quiz.cover_image,
         question_count=len(quiz.questions),
         translations={
             row.lang: QuizCopyIn(title=row.title, description=row.description)
@@ -192,6 +219,8 @@ def _public_out(quiz: Quiz, lang: str) -> QuizPublicOut:
         )
     return QuizPublicOut(
         slug=quiz.slug,
+        game=quiz.game or "mlbb",
+        role=quiz.role or "",
         title=_pick(quiz.translations, lang, "title"),
         description=_pick(quiz.translations, lang, "description"),
         questions=questions,
@@ -199,18 +228,29 @@ def _public_out(quiz: Quiz, lang: str) -> QuizPublicOut:
 
 
 @public_router.get("", response_model=list[QuizCardOut])
-def list_quizzes(response: Response, lang: str = Query(default="ru"), db: Session = Depends(get_db)):
+def list_quizzes(
+    response: Response,
+    lang: str = Query(default="ru"),
+    game: str | None = Query(default=None),
+    role: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+):
     response.headers["Cache-Control"] = "public, max-age=60"
     language = _lang(lang)
+    stmt = select(Quiz).where(Quiz.status == "published")
+    if game:
+        stmt = stmt.where(Quiz.game == game.strip())
+    if role:
+        stmt = stmt.where(Quiz.role == role.strip())
     rows = db.scalars(
-        select(Quiz)
-        .where(Quiz.status == "published")
-        .options(selectinload(Quiz.translations), selectinload(Quiz.questions))
-        .order_by(Quiz.id.desc())
+        stmt.options(selectinload(Quiz.translations), selectinload(Quiz.questions)).order_by(Quiz.id.asc())
     ).all()
     return [
         QuizCardOut(
             slug=quiz.slug,
+            game=quiz.game or "mlbb",
+            role=quiz.role or "",
+            cover_image=quiz.cover_image,
             title=_pick(quiz.translations, language, "title"),
             description=_pick(quiz.translations, language, "description"),
             question_count=len(quiz.questions),
@@ -226,6 +266,9 @@ def preview_quiz(slug: str, lang: str = Query(default="ru"), db: Session = Depen
     language = _lang(lang)
     return QuizPreviewOut(
         slug=quiz.slug,
+        game=quiz.game or "mlbb",
+        role=quiz.role or "",
+        cover_image=quiz.cover_image,
         title=_pick(quiz.translations, language, "title"),
         description=_pick(quiz.translations, language, "description"),
         question_count=len(quiz.questions),
@@ -294,35 +337,39 @@ def submit_quiz(slug: str, body: QuizSubmitIn, db: Session = Depends(get_db)):
     return QuizSubmitOut(score=score, total=len(quiz.questions), result=result, questions=reviews)
 
 
-@admin_router.get("", response_model=list[QuizAdminCardOut])
-def admin_list_quizzes(_: User = Depends(require_admin), db: Session = Depends(get_db)):
-    rows = db.execute(
-        select(
-            Quiz.id,
-            Quiz.slug,
-            Quiz.status,
-            func.count(QuizQuestion.id),
-        )
-        .outerjoin(QuizQuestion, QuizQuestion.quiz_id == Quiz.id)
-        .group_by(Quiz.id)
-        .order_by(Quiz.id.desc())
+@admin_router.get("", response_model=QuizAdminPageOut)
+def admin_list_quizzes(
+    _: User = Depends(require_admin),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    db: Session = Depends(get_db),
+):
+    total = db.scalar(select(func.count()).select_from(Quiz)) or 0
+    quizzes = db.scalars(
+        select(Quiz)
+        .options(selectinload(Quiz.translations), selectinload(Quiz.questions))
+        .order_by(Quiz.id.asc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
     ).all()
-    quizzes = db.scalars(select(Quiz).options(selectinload(Quiz.translations))).all()
-    titles = {quiz.id: quiz for quiz in quizzes}
-    cards: list[QuizAdminCardOut] = []
-    for quiz_id, slug, status, count in rows:
-        quiz = titles[quiz_id]
-        cards.append(
+    return QuizAdminPageOut(
+        items=[
             QuizAdminCardOut(
-                id=quiz_id,
-                slug=slug,
-                status=status,
+                id=quiz.id,
+                slug=quiz.slug,
+                status=quiz.status,
+                game=quiz.game or "mlbb",
+                role=quiz.role or "",
                 title_ru=_pick(quiz.translations, "ru", "title"),
                 title_en=_pick(quiz.translations, "en", "title"),
-                question_count=count,
+                question_count=len(quiz.questions),
             )
-        )
-    return cards
+            for quiz in quizzes
+        ],
+        total=total,
+        page=page,
+        page_size=page_size,
+    )
 
 
 @admin_router.get("/{quiz_id}", response_model=QuizAdminOut)
